@@ -1,0 +1,71 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id             Int             @id @default(autoincrement())
+  username       String          @unique
+  passwordHash   String          @map("password_hash")
+  refreshToken   String?         @map("refresh_token")
+  createdAt      DateTime        @default(now()) @map("created_at")
+  updatedAt      DateTime        @updatedAt @map("updated_at")
+  roleId         Int             @map("role_id")
+  role           Role            @relation(fields: [roleId], references: [id])
+  messageActions MessageAction[]
+
+  @@map("users")
+}
+
+model Role {
+  id          Int          @id @default(autoincrement())
+  name        String       @unique
+  users       User[]
+  permissions Permission[]
+
+  @@map("roles")
+}
+
+model Permission {
+  id          Int    @id @default(autoincrement())
+  code        String @unique
+  description String
+  roleId      Int    @map("role_id")
+  role        Role   @relation(fields: [roleId], references: [id])
+
+  @@map("permissions")
+}
+
+model Queue {
+  id        Int      @id @default(autoincrement())
+  name      String   @unique
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@map("queues")
+}
+
+model MessageAction {
+  id          Int      @id @default(autoincrement())
+  action      String
+  entityType  String   @map("entity_type")
+  entityId    String   @map("entity_id")
+  details     String?
+  createdAt   DateTime @default(now()) @map("created_at")
+  performedBy Int      @map("performed_by")
+  user        User     @relation(fields: [performedBy], references: [id])
+
+  @@map("message_actions")
+}
+
+model SwiftMtCode {
+  id          Int      @id @default(autoincrement())
+  code        String   @unique
+  description String
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  @@map("swift_mt_codes")
+}
