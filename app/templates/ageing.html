@@ -1,0 +1,17 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8"/>
+    <title>Ageing Report</title>
+    <link rel="stylesheet" href="/static/style.css"/>
+  </head>
+  <body>
+    <h1>Ageing report builder</h1>
+    <label>Account ID: <input id="accountId" value="1"/></label>
+    <label>Min amount: <input id="minAmount" type="number" step="0.01"/></label>
+    <button id="load">Load report</button>
+    <button id="export">Export CSV</button>
+    <pre id="result"></pre>
+    <script src="/static/ageing.js"></script>
+  </body>
+</html>
