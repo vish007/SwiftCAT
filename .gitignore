@@ -1,13 +1,4 @@
 node_modules
-.pnpm-store
-.env
-.env.*
-!.env.example
-coverage
 dist
-build
-*.log
-apps/web/.vite
-apps/web/dist
-apps/api/dist
-apps/api/generated
+.pnpm-store
+coverage
