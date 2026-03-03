@@ -1,0 +1,114 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Message Detail</title>
+<style>
+body { font-family: Arial, sans-serif; margin: 20px; }
+.tabs button { margin-right: 8px; }
+.panel { display:none; border:1px solid #ddd; padding:12px; margin-top:10px; }
+.panel.active { display:block; }
+.suggestion { border-bottom: 1px solid #eee; padding: 6px 0; }
+table { border-collapse: collapse; width: 100%; }
+th,td { border: 1px solid #ddd; padding: 6px; text-align:left; }
+</style>
+</head>
+<body>
+  <a href="/">← Messages</a>
+  <h1 id="title">Message</h1>
+  <div class="tabs">
+    <button data-tab="raw">Raw</button>
+    <button data-tab="parsed">Parsed</button>
+    <button data-tab="links">Links</button>
+    <button data-tab="audit">Audit</button>
+  </div>
+
+  <div id="raw" class="panel"></div>
+  <div id="parsed" class="panel"></div>
+  <div id="links" class="panel">
+    <h3>Suggested links</h3>
+    <div id="suggestions"></div>
+    <h3>Manual link</h3>
+    <input id="manualId" placeholder="Linked message ID">
+    <input id="manualRationale" placeholder="Rationale">
+    <button id="manualLink">Link</button>
+    <h3>Current chain</h3>
+    <ul id="chain"></ul>
+  </div>
+  <div id="audit" class="panel">
+    <table><thead><tr><th>Action</th><th>Rationale</th><th>At</th></tr></thead><tbody id="auditRows"></tbody></table>
+  </div>
+
+<script>
+const params = new URLSearchParams(location.search);
+const id = params.get('id');
+let message;
+
+function activate(tab){
+ document.querySelectorAll('.panel').forEach(p=>p.classList.remove('active'));
+ document.getElementById(tab).classList.add('active');
+}
+document.querySelectorAll('[data-tab]').forEach(btn=>btn.onclick=()=>activate(btn.dataset.tab));
+activate('raw');
+
+async function load(){
+  message = await fetch(`/messages/${id}`).then(r=>r.json());
+  document.getElementById('title').textContent = `Message #${message.id}`;
+  document.getElementById('raw').textContent = message.raw_text;
+  document.getElementById('parsed').innerHTML = `<pre>${JSON.stringify(message.parsed, null, 2)}</pre>`;
+  renderChain(message.links);
+  renderAudit(message.actions);
+  await loadSuggestions();
+}
+
+function renderChain(links){
+  const ul = document.getElementById('chain'); ul.innerHTML='';
+  links.forEach(l=>{
+    const li=document.createElement('li');
+    const other = l.primary_message_id === Number(id) ? l.linked_message_id : l.primary_message_id;
+    li.textContent = `↔ Message #${other} (confidence ${l.confidence})`;
+    ul.appendChild(li);
+  });
+}
+
+function renderAudit(actions){
+  const tbody = document.getElementById('auditRows'); tbody.innerHTML='';
+  actions.forEach(a=>{
+    const tr=document.createElement('tr');
+    tr.innerHTML=`<td>${a.action_type}</td><td>${a.rationale||''}</td><td>${a.created_at}</td>`;
+    tbody.appendChild(tr);
+  })
+}
+
+async function loadSuggestions(){
+  const suggestions = await fetch(`/messages/${id}/links/suggest`, {method:'POST'}).then(r=>r.json());
+  const root = document.getElementById('suggestions'); root.innerHTML='';
+  suggestions.forEach(s=>{
+    const div=document.createElement('div'); div.className='suggestion';
+    div.innerHTML=`Message #${s.linked_message_id} — confidence ${s.confidence} <em>${s.rationale}</em> `;
+    const confirm=document.createElement('button'); confirm.textContent='Confirm';
+    confirm.onclick=async()=>{
+      await fetch(`/messages/${id}/links/confirm`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(s)});
+      await load();
+    };
+    const reject=document.createElement('button'); reject.textContent='Reject';
+    reject.onclick=async()=>{
+      await fetch(`/messages/${id}/links/reject`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(s)});
+      await load();
+    };
+    div.appendChild(confirm); div.appendChild(reject);
+    root.appendChild(div);
+  });
+}
+
+document.getElementById('manualLink').onclick = async()=>{
+  const linked_message_id = Number(document.getElementById('manualId').value);
+  const rationale = document.getElementById('manualRationale').value || 'manual link from UI';
+  await fetch(`/messages/${id}/links`, {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({linked_message_id, rationale, confidence:1})});
+  await load();
+};
+
+load();
+</script>
+</body>
+</html>

@@ -1,0 +1,18 @@
+<!doctype html>
+<html>
+<head><meta charset="utf-8"><title>SwiftCAT</title></head>
+<body>
+  <h1>Messages</h1>
+  <ul id="list"></ul>
+  <script>
+    fetch('/messages').then(r=>r.json()).then(messages=>{
+      const ul=document.getElementById('list');
+      messages.forEach(m=>{
+        const li=document.createElement('li');
+        li.innerHTML=`<a href="/message.html?id=${m.id}">Message #${m.id} (${m.direction})</a>`;
+        ul.appendChild(li);
+      })
+    })
+  </script>
+</body>
+</html>
