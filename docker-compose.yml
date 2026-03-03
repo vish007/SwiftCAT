@@ -1,0 +1,10 @@
+version: '3.9'
+services:
+  swiftcat:
+    image: node:22-alpine
+    working_dir: /app
+    volumes:
+      - ./:/app
+    command: sh -c "corepack enable && pnpm install && pnpm dev"
+    ports:
+      - "3000:3000"
