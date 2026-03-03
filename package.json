@@ -1,0 +1,14 @@
+{
+  "name": "swiftcat",
+  "private": true,
+  "version": "0.1.0",
+  "scripts": {
+    "dev": "pnpm -r --parallel dev",
+    "build": "pnpm -r build",
+    "lint": "pnpm -r lint",
+    "test": "pnpm -r test",
+    "typecheck": "pnpm -r typecheck",
+    "db:migrate": "pnpm --filter @swiftcat/api db:migrate",
+    "db:seed": "pnpm --filter @swiftcat/api db:seed"
+  }
+}

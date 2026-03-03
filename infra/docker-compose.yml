@@ -1,0 +1,31 @@
+services:
+  postgres:
+    image: postgres:16
+    container_name: swiftcat-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: swiftcat
+      POSTGRES_PASSWORD: swiftcat
+      POSTGRES_DB: swiftcat
+    ports:
+      - '5432:5432'
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+
+  redis:
+    image: redis:7
+    container_name: swiftcat-redis
+    restart: unless-stopped
+    ports:
+      - '6379:6379'
+
+  rabbitmq:
+    image: rabbitmq:3-management
+    container_name: swiftcat-rabbitmq
+    restart: unless-stopped
+    ports:
+      - '5672:5672'
+      - '15672:15672'
+
+volumes:
+  pg_data:
