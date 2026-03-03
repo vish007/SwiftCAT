@@ -1,130 +1,93 @@
-import http from 'node:http';
-import { readFile } from 'node:fs/promises';
+import { createServer } from 'node:http';
+import { readFileSync, existsSync } from 'node:fs';
 import { extname, join } from 'node:path';
-import { db } from './db.js';
-import { buildSuggestions } from './suggest.js';
+import { parseSwiftMessage } from './parser.js';
+import { insertSwiftMessage, listSwiftMessages, getSwiftMessageById } from './repository.js';
 
-const publicDir = join(process.cwd(), 'public');
+const port = Number(process.env.PORT || 3000);
 
-function json(res, code, body) {
-  res.writeHead(code, { 'Content-Type': 'application/json' });
+function log(level, msg, meta = {}) {
+  console[level](`[${new Date().toISOString()}] ${msg}`, meta);
+}
+
+function sendJson(res, status, body) {
+  res.writeHead(status, { 'Content-Type': 'application/json' });
   res.end(JSON.stringify(body));
 }
 
-function notFound(res) {
-  json(res, 404, { error: 'Not found' });
+function parseBody(req) {
+  return new Promise((resolve, reject) => {
+    let data = '';
+    req.on('data', (chunk) => {
+      data += chunk;
+      if (data.length > 1e7) {
+        reject(new Error('Payload too large'));
+      }
+    });
+    req.on('end', () => {
+      try {
+        resolve(data ? JSON.parse(data) : {});
+      } catch {
+        reject(new Error('Invalid JSON body'));
+      }
+    });
+    req.on('error', reject);
+  });
 }
 
-async function readBody(req) {
-  const chunks = [];
-  for await (const chunk of req) chunks.push(chunk);
-  const raw = Buffer.concat(chunks).toString('utf8');
-  return raw ? JSON.parse(raw) : {};
+function serveStatic(req, res) {
+  const path = req.url === '/' ? '/index.html' : req.url;
+  const filePath = join(process.cwd(), 'public', path);
+  if (!existsSync(filePath)) return false;
+  const content = readFileSync(filePath);
+  const ext = extname(filePath);
+  const map = { '.html': 'text/html', '.js': 'application/javascript', '.css': 'text/css' };
+  res.writeHead(200, { 'Content-Type': map[ext] || 'text/plain' });
+  res.end(content);
+  return true;
 }
 
-function messageResponse(messageId) {
-  const msg = db.getMessage(messageId);
-  if (!msg) return null;
-  return {
-    ...msg,
-    links: db.getLinksForMessage(messageId),
-    actions: db.getActionsForMessage(messageId),
-  };
-}
-
-async function serveStatic(req, res) {
-  const url = new URL(req.url, 'http://localhost');
-  const filePath = url.pathname === '/' ? '/index.html' : url.pathname;
-  const absPath = join(publicDir, filePath);
-
+export const app = createServer(async (req, res) => {
   try {
-    const data = await readFile(absPath);
-    const ext = extname(absPath);
-    const type = ext === '.html' ? 'text/html' : ext === '.js' ? 'application/javascript' : 'text/plain';
-    res.writeHead(200, { 'Content-Type': type });
-    res.end(data);
-  } catch {
-    notFound(res);
+    if (req.method === 'POST' && req.url === '/ingest/swift') {
+      const body = await parseBody(req);
+      const required = ['raw_message', 'message_type', 'sender_bic', 'receiver_bic', 'direction', 'value_date', 'amount', 'currency', 'external_ref'];
+      const missing = required.filter((field) => body[field] === undefined || body[field] === null || body[field] === '');
+      if (missing.length) return sendJson(res, 400, { error: `Missing fields: ${missing.join(', ')}` });
+
+      const parsed = parseSwiftMessage(body.raw_message, body.message_type);
+      const record = insertSwiftMessage(body, parsed);
+      log('info', 'SWIFT message ingested', { external_ref: body.external_ref, mt: body.message_type });
+      return sendJson(res, 200, { data: record });
+    }
+
+    if (req.method === 'GET' && req.url?.startsWith('/api/swift-messages')) {
+      const url = new URL(req.url, `http://localhost:${port}`);
+      const pathParts = url.pathname.split('/').filter(Boolean);
+      if (pathParts.length === 3) {
+        const detail = getSwiftMessageById(pathParts[2]);
+        if (!detail) return sendJson(res, 404, { error: 'Message not found' });
+        return sendJson(res, 200, { data: detail });
+      }
+
+      const messages = listSwiftMessages({
+        ref: url.searchParams.get('ref') || undefined,
+        mt_type: url.searchParams.get('mt_type') || undefined,
+        status: url.searchParams.get('status') || undefined,
+        from_date: url.searchParams.get('from_date') || undefined,
+        to_date: url.searchParams.get('to_date') || undefined
+      });
+      return sendJson(res, 200, { data: messages });
+    }
+
+    if (req.method === 'GET' && serveStatic(req, res)) return;
+    sendJson(res, 404, { error: 'Not found' });
+  } catch (error) {
+    log('error', 'Request failed', { message: error.message });
+    sendJson(res, 500, { error: error.message });
   }
-}
+});
 
-export function createServer() {
-  return http.createServer(async (req, res) => {
-    const url = new URL(req.url, 'http://localhost');
-    const parts = url.pathname.split('/').filter(Boolean);
-
-    if (req.method === 'GET' && url.pathname === '/messages') {
-      return json(res, 200, db.listMessages());
-    }
-
-    if (parts[0] === 'messages' && parts[1]) {
-      const messageId = Number(parts[1]);
-      if (!db.getMessage(messageId)) return notFound(res);
-
-      if (req.method === 'GET' && parts.length === 2) {
-        return json(res, 200, messageResponse(messageId));
-      }
-
-      if (req.method === 'GET' && parts[2] === 'links') {
-        return json(res, 200, db.getLinksForMessage(messageId));
-      }
-
-      if (req.method === 'POST' && parts[2] === 'links' && parts.length === 3) {
-        const body = await readBody(req);
-        try {
-          const link = db.addLink({
-            primaryMessageId: messageId,
-            linkedMessageId: body.linked_message_id,
-            confidence: body.confidence ?? 1,
-            createdBy: 'manual',
-            rationale: body.rationale || 'manual link',
-          });
-          return json(res, 201, link);
-        } catch (e) {
-          return json(res, 400, { error: e.message });
-        }
-      }
-
-      if (req.method === 'POST' && parts[2] === 'links' && parts[3] === 'suggest') {
-        const suggestions = buildSuggestions(db.getMessage(messageId), db.listMessages(), db.getLinksForMessage(messageId));
-        return json(res, 200, suggestions);
-      }
-
-      if (req.method === 'POST' && parts[2] === 'links' && parts[3] === 'confirm') {
-        const body = await readBody(req);
-        try {
-          const link = db.addLink({
-            primaryMessageId: messageId,
-            linkedMessageId: body.linked_message_id,
-            confidence: body.confidence,
-            createdBy: 'suggestion-confirm',
-            rationale: body.rationale || 'confirmed suggested link',
-          });
-          return json(res, 201, link);
-        } catch (e) {
-          return json(res, 400, { error: e.message });
-        }
-      }
-
-      if (req.method === 'POST' && parts[2] === 'links' && parts[3] === 'reject') {
-        const body = await readBody(req);
-        db.addAction({
-          messageId,
-          actionType: 'RejectLink',
-          rationale: body.rationale || `rejected suggestion ${body.linked_message_id}`,
-        });
-        return json(res, 201, { ok: true });
-      }
-    }
-
-    return serveStatic(req, res);
-  });
-}
-
-if (process.argv[1].endsWith('server.js')) {
-  const server = createServer();
-  const port = Number(process.env.PORT || 3000);
-  server.listen(port, '0.0.0.0', () => {
-    console.log(`Server listening on ${port}`);
-  });
+if (process.env.NODE_ENV !== 'test') {
+  app.listen(port, () => log('info', `Server running on http://localhost:${port}`));
 }

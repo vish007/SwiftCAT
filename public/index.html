@@ -1,18 +1,64 @@
 <!doctype html>
 <html>
-<head><meta charset="utf-8"><title>SwiftCAT</title></head>
-<body>
-  <h1>Messages</h1>
-  <ul id="list"></ul>
-  <script>
-    fetch('/messages').then(r=>r.json()).then(messages=>{
-      const ul=document.getElementById('list');
-      messages.forEach(m=>{
-        const li=document.createElement('li');
-        li.innerHTML=`<a href="/message.html?id=${m.id}">Message #${m.id} (${m.direction})</a>`;
-        ul.appendChild(li);
-      })
-    })
-  </script>
-</body>
+  <head>
+    <meta charset="UTF-8" />
+    <title>Swift Library</title>
+    <style>
+      body { font-family: Arial, sans-serif; margin: 20px; }
+      table { width: 100%; border-collapse: collapse; }
+      th, td { border: 1px solid #ddd; padding: 8px; }
+      th { background: #f4f4f4; }
+      .filters { display: grid; grid-template-columns: repeat(5, 1fr); gap: 8px; margin-bottom: 12px; }
+      .badge { color: white; border-radius: 10px; padding: 2px 8px; font-size: 12px; }
+      .ingested { background: #1f9d55; }
+      .review { background: #b7791f; }
+      tr:hover { background: #fafafa; cursor: pointer; }
+    </style>
+  </head>
+  <body>
+    <h1>Swift Library</h1>
+    <div class="filters">
+      <input id="ref" placeholder="Search reference" />
+      <select id="mt"><option value="">All MT Types</option><option>MT103</option><option>MT202</option><option>MT910</option><option>MT940</option><option>MT950</option><option>MT700</option><option>MT707</option><option>MT760</option></select>
+      <select id="status"><option value="">All Statuses</option><option value="ingested">ingested</option><option value="review">review</option></select>
+      <input id="from" type="date" />
+      <input id="to" type="date" />
+    </div>
+    <table>
+      <thead><tr><th>Reference</th><th>MT Type</th><th>Status</th><th>Amount</th><th>Value Date</th></tr></thead>
+      <tbody id="rows"></tbody>
+    </table>
+    <h3>Message Detail</h3>
+    <pre id="detail">Click a row to view placeholder details...</pre>
+    <script>
+      const fields = ['ref','mt','status','from','to'];
+      fields.forEach((id)=>document.getElementById(id).addEventListener('input', load));
+
+      async function load() {
+        const params = new URLSearchParams();
+        if (ref.value) params.set('ref', ref.value);
+        if (mt.value) params.set('mt_type', mt.value);
+        if (status.value) params.set('status', status.value);
+        if (from.value) params.set('from_date', from.value);
+        if (to.value) params.set('to_date', to.value);
+        const res = await fetch('/api/swift-messages?' + params.toString());
+        const json = await res.json();
+        rows.innerHTML = '';
+        json.data.forEach((m) => {
+          const tr = document.createElement('tr');
+          tr.innerHTML = `<td>${m.external_ref}</td><td>${m.mt_type}</td><td><span class="badge ${m.status}">${m.status}</span></td><td>${m.currency} ${m.amount}</td><td>${m.value_date}</td>`;
+          tr.onclick = () => showDetail(m.id);
+          rows.appendChild(tr);
+        });
+      }
+
+      async function showDetail(id) {
+        const res = await fetch('/api/swift-messages/' + id);
+        const json = await res.json();
+        detail.textContent = JSON.stringify(json.data, null, 2);
+      }
+
+      load();
+    </script>
+  </body>
 </html>
