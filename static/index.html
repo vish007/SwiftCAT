@@ -1,0 +1,81 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>SwiftCAT Reconciliation</title>
+  <style>
+    body { font-family: Arial, sans-serif; margin: 24px; }
+    .cards { display: flex; gap: 12px; margin-bottom: 20px; }
+    .card { border: 1px solid #ddd; padding: 12px; border-radius: 8px; min-width: 140px; }
+    table { border-collapse: collapse; width: 100%; margin-top: 12px; }
+    td, th { border: 1px solid #ddd; padding: 8px; }
+    .wizard { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 16px; }
+    .panel { border: 1px solid #ccc; padding: 10px; border-radius: 8px; }
+  </style>
+</head>
+<body>
+  <h1>Reconcile Dashboard</h1>
+  <button onclick="autoRun()">Run Auto-Match</button>
+  <div class="cards" id="kpis"></div>
+
+  <h2>Unmatched Queue</h2>
+  <table>
+    <thead><tr><th>Case</th><th>Ref</th><th>Amount</th><th>Ageing</th><th>Status</th><th>Action</th></tr></thead>
+    <tbody id="rows"></tbody>
+  </table>
+
+  <h2>Manual Match Wizard</h2>
+  <div class="wizard">
+    <div class="panel"><h3>Left Message</h3><pre id="left"></pre></div>
+    <div class="panel"><h3>Right Message Candidate</h3><pre id="right"></pre></div>
+  </div>
+  <label>Case ID <input id="caseId"/></label>
+  <label>Right Message ID <input id="rightId"/></label>
+  <label>Tolerance <input id="tolerance" value="0"/></label>
+  <button onclick="confirmManual()">Confirm Manual Match</button>
+
+  <h2>Exception Workflow</h2>
+  <label>Case ID <input id="excCase"/></label>
+  <button onclick="createException()">Create Exception</button>
+  <button onclick="assignCase()">Assign to analyst1</button>
+  <button onclick="commentCase()">Comment</button>
+  <button onclick="closeCase()">Close</button>
+
+<script>
+async function loadDashboard(){
+  const d = await (await fetch('/reconcile/dashboard')).json();
+  document.getElementById('kpis').innerHTML = Object.entries(d).map(([k,v])=>`<div class='card'><strong>${k}</strong><div>${v}</div></div>`).join('');
+  const u = await (await fetch('/reconcile/unmatched')).json();
+  document.getElementById('rows').innerHTML = u.items.map(r=>`<tr><td>${r.id}</td><td>${r.ref||''}</td><td>${r.amount||''} ${r.currency||''}</td><td>${r.ageing_days}</td><td>${r.status}</td><td><button onclick='showCase(${r.id})'>Load</button></td></tr>`).join('');
+}
+async function autoRun(){ await fetch('/reconcile/auto-run', {method:'POST'}); await loadDashboard(); }
+async function showCase(id){
+  const c = await (await fetch(`/reconcile/case/${id}`)).json();
+  document.getElementById('caseId').value = id;
+  document.getElementById('excCase').value = id;
+  document.getElementById('left').textContent = JSON.stringify(c.left, null, 2);
+  document.getElementById('right').textContent = JSON.stringify(c.right||{hint:'pick right id'}, null, 2);
+}
+async function confirmManual(){
+  const body = { right_msg_id: Number(rightId.value), user_id:'ui-user', tolerance:Number(tolerance.value)};
+  await fetch(`/reconcile/case/${caseId.value}/confirm-match`, {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)});
+  await loadDashboard();
+}
+async function createException(){
+  await fetch(`/reconcile/case/${excCase.value}/create-exception`, {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({user_id:'ui-user', reason:'investigate'})});
+  await loadDashboard();
+}
+async function assignCase(){
+  await fetch(`/reconcile/case/${excCase.value}/assign`, {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({owner:'analyst1', user_id:'ui-user'})});
+}
+async function commentCase(){
+  await fetch(`/reconcile/case/${excCase.value}/comment`, {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({user_id:'ui-user', comment:'checked ledger'})});
+}
+async function closeCase(){
+  await fetch(`/reconcile/case/${excCase.value}/close`, {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({user_id:'ui-user'})});
+  await loadDashboard();
+}
+loadDashboard();
+</script>
+</body>
+</html>
