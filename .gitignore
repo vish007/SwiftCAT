@@ -1,5 +1,4 @@
-__pycache__/
-.pytest_cache/
-*.pyc
-swiftcat.db
-exports/*.txt
+node_modules
+dist
+.pnpm-store
+coverage
