@@ -1,0 +1,38 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>SwiftCAT M6</title>
+  <link rel="stylesheet" href="/static/app.css" />
+</head>
+<body>
+<nav>
+  <a href="/">Reconcile Dashboard</a>
+  <a href="/nostro-ageing">Nostro Ageing</a>
+  <a href="/messages/msg-100">Message Detail</a>
+</nav>
+<div class="prompt-chips">
+  {% if page == 'dashboard' %}
+  <button onclick="runInsight('suggest')">Suggest top match</button>
+  {% elif page == 'message_detail' %}
+  <button onclick="runInsight('explain')">Explain why unmatched</button>
+  <button onclick="runInsight('risk')">Risk score</button>
+  {% elif page == 'nostro' %}
+  <button onclick="runInsight('draft')">Draft action</button>
+  {% endif %}
+</div>
+<main>{% block content %}{% endblock %}</main>
+
+<aside id="ai-widget">
+  <h3>SwiftCAT AI Assistant</h3>
+  <div id="ai-log"></div>
+  <input id="ai-input" placeholder="Ask AI assistant" />
+  <button onclick="sendChat()">Send</button>
+</aside>
+<script>
+window.currentPage = "{{ page }}";
+window.messageId = "{{ message.id if message else '' }}";
+</script>
+<script src="/static/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,15 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Message Detail: {{ message.id }}</h1>
+<section class="insights-panel">
+  <h2>AI Insights</h2>
+  <pre id="insights-output">Use Explain why unmatched or Risk score.</pre>
+</section>
+<ul>
+  <li>Type: {{ message.type }}</li>
+  <li>Status: <span id="message-status">{{ message.status }}</span></li>
+  <li>Amount: {{ message.amount }} {{ message.currency }}</li>
+  <li>Queue: <span id="message-queue">{{ message.queue }}</span></li>
+</ul>
+<button onclick="confirmSuggestedMatch()">Confirm suggested match (audited)</button>
+{% endblock %}

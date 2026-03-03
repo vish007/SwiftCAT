@@ -1,0 +1,19 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Reconcile Dashboard</h1>
+<section class="insights-panel">
+  <h2>AI Insights</h2>
+  <pre id="insights-output">Run a chip to fetch suggestions.</pre>
+</section>
+<table>
+  <tr><th>ID</th><th>Type</th><th>Status</th><th>Risk</th></tr>
+  {% for m in messages %}
+  <tr>
+    <td><a href="/messages/{{ m.id }}">{{ m.id }}</a></td>
+    <td>{{ m.type }}</td>
+    <td>{{ m.status }}</td>
+    <td>{% if m.type == 'MT700' %}<span class="risk-pill" data-risk-message="{{ m.id }}">pending</span>{% endif %}</td>
+  </tr>
+  {% endfor %}
+</table>
+{% endblock %}

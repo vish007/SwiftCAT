@@ -1,0 +1,13 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Nostro Ageing</h1>
+<section class="insights-panel">
+  <h2>AI Insights</h2>
+  <pre id="insights-output">Draft actions for ageing items.</pre>
+</section>
+<ul>
+{% for m in messages %}
+  <li>{{ m.id }} - {{ m.status }} - {{ m.queue }}</li>
+{% endfor %}
+</ul>
+{% endblock %}
