@@ -1,4 +1,4 @@
 node_modules
-*.db
-coverage
 dist
+.pnpm-store
+coverage
