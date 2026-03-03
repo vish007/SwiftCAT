@@ -1,0 +1,12 @@
+{
+  "name": "swiftcat",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node src/server.js",
+    "db:migrate": "bash scripts/migrate.sh",
+    "db:seed": "node scripts/seed.js",
+    "test": "node --test tests/*.test.js"
+  }
+}
