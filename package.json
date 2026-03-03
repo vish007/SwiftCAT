@@ -1,0 +1,13 @@
+{
+  "name": "swiftcat",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "node src/server.mjs",
+    "test": "node --test test/unit.test.mjs test/integration.test.mjs",
+    "test:e2e": "node --test test/e2e.test.mjs",
+    "lint": "node scripts/lint.mjs",
+    "typecheck": "node scripts/typecheck.mjs"
+  }
+}
