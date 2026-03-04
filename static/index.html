@@ -10,11 +10,16 @@
     table { border-collapse: collapse; width: 100%; margin-top: 12px; }
     td, th { border: 1px solid #ddd; padding: 8px; }
     .wizard { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 16px; }
-    .panel { border: 1px solid #ccc; padding: 10px; border-radius: 8px; }
+    .panel { border: 1px solid #ccc; padding: 10px; border-radius: 8px; margin-top: 14px; }
+    .ai-widget { position: fixed; right: 12px; bottom: 12px; width: 320px; }
+    .ai-drawer { background: #fff; border: 1px solid #333; padding: 10px; }
+    .hidden { display: none; }
+    .chip { margin: 2px; }
   </style>
 </head>
 <body>
   <h1>Reconcile Dashboard</h1>
+  <div><a href="/message">Message Detail</a> | <a href="/nostro-ageing">Nostro Ageing</a></div>
   <button onclick="autoRun()">Run Auto-Match</button>
   <div class="cards" id="kpis"></div>
 
@@ -34,13 +39,15 @@
   <label>Tolerance <input id="tolerance" value="0"/></label>
   <button onclick="confirmManual()">Confirm Manual Match</button>
 
-  <h2>Exception Workflow</h2>
-  <label>Case ID <input id="excCase"/></label>
-  <button onclick="createException()">Create Exception</button>
-  <button onclick="assignCase()">Assign to analyst1</button>
-  <button onclick="commentCase()">Comment</button>
-  <button onclick="closeCase()">Close</button>
+  <div class="panel">
+    <h3>AI Insights Panel</h3>
+    <button onclick="aiExplain()">Explain why unmatched</button>
+    <button onclick="aiSuggest()">Suggest match candidates</button>
+    <button onclick="aiDraftAndApply()">Draft action + user confirm</button>
+    <pre id="aiOut"></pre>
+  </div>
 
+<script src="/static/ai-widget.js"></script>
 <script>
 async function loadDashboard(){
   const d = await (await fetch('/reconcile/dashboard')).json();
@@ -51,8 +58,7 @@ async function loadDashboard(){
 async function autoRun(){ await fetch('/reconcile/auto-run', {method:'POST'}); await loadDashboard(); }
 async function showCase(id){
   const c = await (await fetch(`/reconcile/case/${id}`)).json();
-  document.getElementById('caseId').value = id;
-  document.getElementById('excCase').value = id;
+  caseId.value = id;
   document.getElementById('left').textContent = JSON.stringify(c.left, null, 2);
   document.getElementById('right').textContent = JSON.stringify(c.right||{hint:'pick right id'}, null, 2);
 }
@@ -61,20 +67,29 @@ async function confirmManual(){
   await fetch(`/reconcile/case/${caseId.value}/confirm-match`, {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)});
   await loadDashboard();
 }
-async function createException(){
-  await fetch(`/reconcile/case/${excCase.value}/create-exception`, {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({user_id:'ui-user', reason:'investigate'})});
-  await loadDashboard();
+async function aiExplain(){
+  const response = await fetch('/ai/explain/unmatched', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({case_id:Number(caseId.value)})}).then(r=>r.json());
+  aiOut.textContent = JSON.stringify(response, null, 2);
 }
-async function assignCase(){
-  await fetch(`/reconcile/case/${excCase.value}/assign`, {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({owner:'analyst1', user_id:'ui-user'})});
+async function aiSuggest(){
+  const response = await fetch('/ai/suggest/match-candidates', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({case_id:Number(caseId.value)})}).then(r=>r.json());
+  aiOut.textContent = JSON.stringify(response, null, 2);
+  if (response.suggestions?.[0]) rightId.value = response.suggestions[0].linked_message_id;
 }
-async function commentCase(){
-  await fetch(`/reconcile/case/${excCase.value}/comment`, {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({user_id:'ui-user', comment:'checked ledger'})});
+async function aiDraftAndApply(){
+  const draft = await fetch('/ai/draft/action', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({case_id:Number(caseId.value), action_type:'confirm-match', user_id:'ui-user'})}).then(r=>r.json());
+  aiOut.textContent = JSON.stringify(draft, null, 2);
+  if (confirm('Apply AI proposed action through business API?')) {
+    await fetch(draft.proposed_action.endpoint, {
+      method: draft.proposed_action.method,
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify(draft.proposed_action.payload)
+    });
+    await loadDashboard();
+  }
 }
-async function closeCase(){
-  await fetch(`/reconcile/case/${excCase.value}/close`, {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({user_id:'ui-user'})});
-  await loadDashboard();
-}
+
+SwiftAIDrawer.mountWidget('reconcile-dashboard', ['Explain why unmatched', 'Suggest candidate match', 'Draft action']);
 loadDashboard();
 </script>
 </body>

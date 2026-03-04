@@ -5,6 +5,7 @@ from wsgiref.simple_server import make_server
 
 from db import audit, create_case, get_conn, init_db, seed_demo_data
 from matching import LEFT_TYPES, RIGHT_TYPES, find_best_matches
+from ai_rules import draft_action, explain_unmatched, score_risk, suggest_match_candidates
 
 
 def json_response(start_response, status_code, payload):
@@ -148,10 +149,18 @@ def get_case(case_id):
 
 
 def render_index():
-    with open('static/index.html', 'rb') as f:
+    return render_static('static/index.html')
+
+
+
+
+def render_static(path: str):
+    with open(path, 'rb') as f:
         return f.read()
 
 
+def ai_log(case_id: int | None, action: str, details: str):
+    audit(action, 'swiftcat_ai', case_id, details)
 def app(environ, start_response):
     init_db()
     seed_demo_data()
@@ -180,6 +189,48 @@ def app(environ, start_response):
         if not case:
             return json_response(start_response, 404, {'error': 'case not found'})
         return json_response(start_response, 200, case)
+    if method == 'GET' and path == '/message':
+        body = render_static('static/message.html')
+        start_response('200 OK', [('Content-Type', 'text/html; charset=utf-8')])
+        return [body]
+    if method == 'GET' and path == '/nostro-ageing':
+        body = render_static('static/nostro_ageing.html')
+        start_response('200 OK', [('Content-Type', 'text/html; charset=utf-8')])
+        return [body]
+    if method == 'GET' and path.startswith('/static/'):
+        file_path = path.lstrip('/')
+        content_type = 'text/plain'
+        if file_path.endswith('.js'):
+            content_type = 'application/javascript'
+        elif file_path.endswith('.html'):
+            content_type = 'text/html; charset=utf-8'
+        elif file_path.endswith('.css'):
+            content_type = 'text/css'
+        body = render_static(file_path)
+        start_response('200 OK', [('Content-Type', content_type)])
+        return [body]
+
+    if method == 'POST' and path == '/ai/suggest/match-candidates':
+        payload = read_json(environ)
+        response = suggest_match_candidates(int(payload.get('case_id', 0)))
+        ai_log(response.get('case_id'), 'AI_SUGGEST_MATCH', json.dumps(response))
+        return json_response(start_response, 200, response)
+    if method == 'POST' and path == '/ai/explain/unmatched':
+        payload = read_json(environ)
+        response = explain_unmatched(int(payload.get('case_id', 0)))
+        ai_log(response.get('case_id'), 'AI_EXPLAIN_UNMATCHED', response['explanation'])
+        return json_response(start_response, 200, response)
+    if method == 'POST' and path == '/ai/risk/score':
+        payload = read_json(environ)
+        response = score_risk(payload)
+        ai_log(None, 'AI_RISK_SCORE', json.dumps(response))
+        return json_response(start_response, 200, response)
+    if method == 'POST' and path == '/ai/draft/action':
+        payload = read_json(environ)
+        response = draft_action(payload)
+        ai_log(int(payload.get('case_id', 0) or 0), 'AI_DRAFT_ACTION', response['rationale'])
+        return json_response(start_response, 200, response)
+
     if len(parts) == 4 and parts[:2] == ['reconcile', 'case'] and method == 'POST':
         case_id = int(parts[2])
         payload = read_json(environ)

@@ -1,0 +1,39 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Nostro Ageing + AI Insights</title>
+  <style>
+    body { font-family: Arial, sans-serif; margin: 24px; }
+    .panel { border: 1px solid #ddd; border-radius: 8px; padding: 12px; margin-bottom: 12px; }
+    .ai-widget { position: fixed; right: 12px; bottom: 12px; width: 320px; }
+    .ai-drawer { background: #fff; border: 1px solid #333; padding: 10px; }
+    .hidden { display: none; }
+    .chip { margin: 2px; }
+  </style>
+</head>
+<body>
+  <a href="/">← Reconcile Dashboard</a>
+  <h1>Nostro Ageing (Demo)</h1>
+  <div class="panel">
+    <h3>AI Insights</h3>
+    <button id="risk700">Category-7 risk scoring demo</button>
+    <pre id="riskOut"></pre>
+  </div>
+
+  <script src="/static/ai-widget.js"></script>
+  <script>
+    risk700.onclick = async () => {
+      const payload = {
+        mt_type: '700',
+        text: 'LC terms include restricted goods and best effort shipping clause subject to approval'
+      };
+      const response = await fetch('/ai/risk/score', {
+        method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(payload)
+      }).then(r => r.json());
+      riskOut.textContent = JSON.stringify(response, null, 2);
+    };
+    SwiftAIDrawer.mountWidget('nostro-ageing', ['Risk score MT700', 'Recommend queue', 'Explain aged breaks']);
+  </script>
+</body>
+</html>
