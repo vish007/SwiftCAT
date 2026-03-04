@@ -99,6 +99,8 @@ def seed_demo_data():
             ("202", "REF-FUZZY-1", 250.0, "EUR", "2026-01-11", "BICAAA"),
             ("950", "OTHER-REF", 250.0, "EUR", "2026-01-12", "BICBBB"),
             ("910", "REF-UNMATCHED", 700.0, "GBP", "2026-01-13", "BICAAA"),
+            ("950", "REF-TOL-1", 650.0, "GBP", "2026-01-14", "BICBBB"),
+            ("700", "LC-SANCTION-01", 50000.0, "USD", "2026-01-15", "BICAAA"),
         ]
         conn.executemany(
             "INSERT INTO messages(msg_type, ref, amount, currency, value_date, bic) VALUES(?,?,?,?,?,?)",
