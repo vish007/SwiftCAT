@@ -17,8 +17,38 @@ model User {
   roleId         Int             @map("role_id")
   role           Role            @relation(fields: [roleId], references: [id])
   messageActions MessageAction[]
+  agentRuns      AgentRun[]      @relation("AgentRunStarter")
 
   @@map("users")
+}
+
+enum WorkItemStatus {
+  RECEIVED
+  CLASSIFIED
+  ROUTED
+}
+
+enum AgentRunStatus {
+  RUNNING
+  SUCCEEDED
+  FAILED
+}
+
+enum AgentStepType {
+  CLASSIFY
+  SCREEN
+  POLICY_CHECK
+  TOOL_CALL
+  STATE_TRANSITION
+  RECON_MATCH
+  CREATE_EXCEPTION
+}
+
+enum AgentStepStatus {
+  STARTED
+  SUCCEEDED
+  FAILED
+  SKIPPED
 }
 
 model Role {
@@ -68,4 +98,46 @@ model SwiftMtCode {
   createdAt   DateTime @default(now()) @map("created_at")
 
   @@map("swift_mt_codes")
+}
+
+model WorkItem {
+  id        Int            @id @default(autoincrement())
+  reference String         @unique
+  status    WorkItemStatus @default(RECEIVED)
+  createdAt DateTime       @default(now()) @map("created_at")
+  updatedAt DateTime       @updatedAt @map("updated_at")
+  agentRuns AgentRun[]
+
+  @@map("work_items")
+}
+
+model AgentRun {
+  id              Int            @id @default(autoincrement())
+  workItemId      Int            @map("work_item_id")
+  workItem        WorkItem       @relation(fields: [workItemId], references: [id])
+  status          AgentRunStatus @default(RUNNING)
+  startedAt       DateTime       @default(now()) @map("started_at")
+  finishedAt      DateTime?      @map("finished_at")
+  startedByUserId Int            @map("started_by_user_id")
+  startedByUser   User           @relation("AgentRunStarter", fields: [startedByUserId], references: [id])
+  error           Json?
+  steps           AgentStep[]
+
+  @@map("agent_runs")
+}
+
+model AgentStep {
+  id         Int             @id @default(autoincrement())
+  agentRunId Int             @map("agent_run_id")
+  agentRun   AgentRun        @relation(fields: [agentRunId], references: [id])
+  stepName   String          @map("step_name")
+  stepType   AgentStepType   @map("step_type")
+  status     AgentStepStatus
+  input      Json?
+  output     Json?
+  rationale  String?
+  startedAt  DateTime        @default(now()) @map("started_at")
+  finishedAt DateTime?       @map("finished_at")
+
+  @@map("agent_steps")
 }

@@ -17,6 +17,7 @@
   </head>
   <body>
     <h1>Swift Library</h1>
+    <p><a href="/work-items.html">Open Work Items Board →</a></p>
     <div class="filters">
       <input id="ref" placeholder="Search reference" />
       <select id="mt"><option value="">All MT Types</option><option>MT103</option><option>MT202</option><option>MT910</option><option>MT940</option><option>MT950</option><option>MT700</option><option>MT707</option><option>MT760</option></select>
@@ -25,11 +26,11 @@
       <input id="to" type="date" />
     </div>
     <table>
-      <thead><tr><th>Reference</th><th>MT Type</th><th>Status</th><th>Amount</th><th>Value Date</th></tr></thead>
+      <thead><tr><th>Reference</th><th>MT Type</th><th>Status</th><th>Amount</th><th>Value Date</th><th>Work Item</th></tr></thead>
       <tbody id="rows"></tbody>
     </table>
     <h3>Message Detail</h3>
-    <pre id="detail">Click a row to view placeholder details...</pre>
+    <pre id="detail">Click a row to view details...</pre>
     <script>
       const fields = ['ref','mt','status','from','to'];
       fields.forEach((id)=>document.getElementById(id).addEventListener('input', load));
@@ -46,7 +47,7 @@
         rows.innerHTML = '';
         json.data.forEach((m) => {
           const tr = document.createElement('tr');
-          tr.innerHTML = `<td>${m.external_ref}</td><td>${m.mt_type}</td><td><span class="badge ${m.status}">${m.status}</span></td><td>${m.currency} ${m.amount}</td><td>${m.value_date}</td>`;
+          tr.innerHTML = `<td>${m.external_ref}</td><td>${m.mt_type}</td><td><span class="badge ${m.status}">${m.status}</span></td><td>${m.currency} ${m.amount}</td><td>${m.value_date}</td><td>${m.work_item_id ? `<a href="/work-item.html?id=${m.work_item_id}">WI-${m.work_item_id}</a>` : '-'}</td>`;
           tr.onclick = () => showDetail(m.id);
           rows.appendChild(tr);
         });

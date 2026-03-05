@@ -1,5 +1,4 @@
 import { FormEvent, useEffect, useMemo, useState } from 'react';
-import type { DemoScenario } from '@swiftcat/shared';
 
 type User = { id: number; username: string; role: string };
 
@@ -9,13 +8,28 @@ type AuthResponse = {
   user: User;
 };
 
-type ScenarioResponse = {
-  data: DemoScenario[];
-  page: number;
-  pageSize: number;
-  total: number;
-  totalPages: number;
-  correlationId: string;
+type WorkItem = {
+  id: number;
+  reference: string;
+  status: 'RECEIVED' | 'CLASSIFIED' | 'ROUTED';
+};
+
+type AgentRun = {
+  id: number;
+  workItemId: number;
+  status: 'RUNNING' | 'SUCCEEDED' | 'FAILED';
+  startedAt: string;
+  finishedAt: string | null;
+};
+
+type AgentStep = {
+  id: number;
+  stepName: string;
+  stepType: string;
+  status: 'STARTED' | 'SUCCEEDED' | 'FAILED' | 'SKIPPED';
+  rationale: string | null;
+  input: Record<string, unknown> | null;
+  output: Record<string, unknown> | null;
 };
 
 const API_BASE = import.meta.env.VITE_API_URL ?? 'http://localhost:3001';
@@ -29,49 +43,57 @@ export function App() {
   const [password, setPassword] = useState('password123');
   const [auth, setAuth] = useState<AuthResponse | null>(null);
   const [error, setError] = useState('');
-  const [scenarios, setScenarios] = useState<DemoScenario[]>([]);
-  const [loadingScenarios, setLoadingScenarios] = useState(false);
+  const [workItems, setWorkItems] = useState<WorkItem[]>([]);
+  const [selectedWorkItemId, setSelectedWorkItemId] = useState<number | null>(null);
+  const [runs, setRuns] = useState<AgentRun[]>([]);
+  const [stepsByRunId, setStepsByRunId] = useState<Record<number, AgentStep[]>>({});
 
   const roleGreeting = useMemo(() => {
-    if (!auth) {
-      return '';
-    }
-    if (auth.user.role === 'Maker') {
-      return 'Welcome Maker! You can prepare Swift queue actions.';
-    }
-    if (auth.user.role === 'Compliance') {
-      return 'Welcome Compliance! You can review audit actions.';
-    }
+    if (!auth) return '';
+    if (auth.user.role === 'Maker') return 'Welcome Maker! You can prepare Swift queue actions.';
+    if (auth.user.role === 'Compliance') return 'Welcome Compliance! You can review audit actions.';
     return 'Welcome AI Agent! Autonomous assist mode enabled.';
   }, [auth]);
 
-  useEffect(() => {
-    if (!auth) {
-      return;
-    }
+  async function apiGet<T>(path: string): Promise<T> {
+    if (!auth) throw new Error('Not authenticated');
+    const response = await fetch(`${API_BASE}${path}`, {
+      headers: { Authorization: `Bearer ${auth.accessToken}` }
+    });
+    if (!response.ok) throw new Error(`Request failed: ${path}`);
+    return response.json() as Promise<T>;
+  }
 
-    const correlationId = `ui-${Date.now()}`;
-    setLoadingScenarios(true);
-    fetch(`${API_BASE}/demo/scenarios?page=1&pageSize=10`, {
-      headers: {
-        Authorization: `Bearer ${auth.accessToken}`,
-        'x-correlation-id': correlationId
-      }
-    })
-      .then(async (response) => {
-        if (!response.ok) {
-          throw new Error('Could not load scenarios');
+  async function loadRuns(workItemId: number) {
+    const runsResponse = await apiGet<{ data: AgentRun[] }>(`/agent/runs?workItemId=${workItemId}`);
+    setRuns(runsResponse.data);
+
+    const stepsEntries = await Promise.all(
+      runsResponse.data.map(async (run) => {
+        const stepsResponse = await apiGet<{ data: AgentStep[] }>(`/agent/runs/${run.id}/steps`);
+        return [run.id, stepsResponse.data] as const;
+      })
+    );
+
+    setStepsByRunId(Object.fromEntries(stepsEntries));
+  }
+
+  useEffect(() => {
+    if (!auth) return;
+    apiGet<{ data: WorkItem[] }>('/work-items')
+      .then((response) => {
+        setWorkItems(response.data);
+        if (response.data.length > 0) {
+          setSelectedWorkItemId(response.data[0].id);
         }
-        const payload = (await response.json()) as ScenarioResponse;
-        setScenarios(payload.data);
       })
-      .catch(() => {
-        setError('Unable to load banker demo scenarios');
-      })
-      .finally(() => {
-        setLoadingScenarios(false);
-      });
+      .catch(() => setError('Unable to load work items'));
   }, [auth]);
+
+  useEffect(() => {
+    if (!auth || selectedWorkItemId === null) return;
+    loadRuns(selectedWorkItemId).catch(() => setError('Unable to load agent timeline'));
+  }, [auth, selectedWorkItemId]);
 
   async function onSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -91,6 +113,18 @@ export function App() {
     setAuth(payload);
   }
 
+  async function runAgent() {
+    if (!auth || selectedWorkItemId === null) return;
+    await fetch(`${API_BASE}/agent/run/${selectedWorkItemId}`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${auth.accessToken}` }
+    });
+
+    const items = await apiGet<{ data: WorkItem[] }>('/work-items');
+    setWorkItems(items.data);
+    await loadRuns(selectedWorkItemId);
+  }
+
   if (!auth) {
     return (
       <main style={{ maxWidth: 420, margin: '60px auto', fontFamily: 'sans-serif' }}>
@@ -107,41 +141,56 @@ export function App() {
     );
   }
 
+  const selectedWorkItem = workItems.find((item) => item.id === selectedWorkItemId) ?? null;
+
   return (
-    <main style={{ maxWidth: 900, margin: '30px auto', fontFamily: 'sans-serif' }}>
-      <h1>SwiftCat Banker Demo Dashboard</h1>
+    <main style={{ maxWidth: 900, margin: '40px auto', fontFamily: 'sans-serif' }}>
+      <h1>SwiftCat Dashboard</h1>
       <p>Hi {auth.user.username}.</p>
       <p>{roleGreeting}</p>
       <p>Your role: <strong>{auth.user.role}</strong></p>
 
-      <h2>Milestone R7 Scenarios</h2>
-      {loadingScenarios && <p>Loading scenarios...</p>}
-      {scenarios.map((scenario) => (
-        <section key={scenario.id} style={{ border: '1px solid #ddd', borderRadius: 8, marginBottom: 12, padding: 12 }}>
-          <h3>{scenario.name}</h3>
-          <p>
-            Work item <strong>{scenario.workItemId}</strong> · Classification <strong>{scenario.classification}</strong> · Status <strong>{scenario.status}</strong>
-          </p>
-          <ul>
-            {scenario.timeline.map((step) => (
-              <li key={`${scenario.id}-${step.id}`}>
-                {step.label} ({step.actor}) — corr: <code>{step.correlationId}</code>
-              </li>
-            ))}
-          </ul>
-          {scenario.approvals.length > 0 && (
-            <>
-              <h4>Approvals</h4>
-              <ul>
-                {scenario.approvals.map((approval) => (
-                  <li key={approval.id}>{approval.requiredRole}: {approval.status} — {approval.rationale}</li>
-                ))}
-              </ul>
-            </>
-          )}
+      <section style={{ marginTop: 24 }}>
+        <h2>Work Items</h2>
+        <ul>
+          {workItems.map((item) => (
+            <li key={item.id}>
+              <button type="button" onClick={() => setSelectedWorkItemId(item.id)}>
+                {item.reference} — {item.status}
+              </button>
+            </li>
+          ))}
+        </ul>
+      </section>
+
+      {selectedWorkItem && (
+        <section style={{ marginTop: 24 }}>
+          <h2>Work Item Detail</h2>
+          <p>Reference: <strong>{selectedWorkItem.reference}</strong></p>
+          <p>Status: <strong>{selectedWorkItem.status}</strong></p>
+          <button type="button" onClick={() => runAgent().catch(() => setError('Agent run failed'))}>Run Agent</button>
+
+          <h3 style={{ marginTop: 20 }}>Agent Timeline</h3>
+          {runs.length === 0 && <p>No runs yet.</p>}
+          {runs.map((run) => (
+            <div key={run.id} style={{ border: '1px solid #ddd', padding: 12, marginBottom: 12 }}>
+              <p>
+                Run #{run.id} — <strong>{run.status}</strong>
+              </p>
+              <p>Started: {new Date(run.startedAt).toLocaleString()}</p>
+              {stepsByRunId[run.id]?.map((step) => (
+                <details key={step.id} style={{ marginBottom: 8 }}>
+                  <summary>{step.stepType} / {step.stepName} — {step.status}</summary>
+                  <p>{step.rationale}</p>
+                  <pre>input: {JSON.stringify(step.input, null, 2)}</pre>
+                  <pre>output: {JSON.stringify(step.output, null, 2)}</pre>
+                </details>
+              ))}
+            </div>
+          ))}
         </section>
-      ))}
-      {!loadingScenarios && scenarios.length === 0 && <p>No scenarios found.</p>}
+      )}
+
       {error && <p style={{ color: 'crimson' }}>{error}</p>}
     </main>
   );

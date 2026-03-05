@@ -1,10 +1,18 @@
 import { createServer } from 'node:http';
 import { readFileSync, existsSync } from 'node:fs';
 import { extname, join } from 'node:path';
-import { parseSwiftMessage } from './parser.js';
-import { insertSwiftMessage, listSwiftMessages, getSwiftMessageById } from './repository.js';
+import { normalizeMessage } from './normalization.js';
+import {
+  insertSwiftMessage,
+  upsertCanonicalMessage,
+  listSwiftMessages,
+  getSwiftMessageById,
+  getCanonicalById,
+  getCanonicalBySwiftMessageId
+} from './repository.js';
 
 const port = Number(process.env.PORT || 3000);
+const WORK_ITEM_STATES = ['RECEIVED', 'CLASSIFIED', 'SCREENED', 'ROUTED', 'PROCESSING', 'WAITING_APPROVAL', 'EXCEPTION', 'CLOSED'];
 
 function log(level, msg, meta = {}) {
   console[level](`[${new Date().toISOString()}] ${msg}`, meta);
@@ -36,7 +44,8 @@ function parseBody(req) {
 }
 
 function serveStatic(req, res) {
-  const path = req.url === '/' ? '/index.html' : req.url;
+  const requestUrl = new URL(req.url || '/', `http://localhost:${port}`);
+  const path = requestUrl.pathname === '/' ? '/index.html' : requestUrl.pathname;
   const filePath = join(process.cwd(), 'public', path);
   if (!existsSync(filePath)) return false;
   const content = readFileSync(filePath);
@@ -55,10 +64,27 @@ export const app = createServer(async (req, res) => {
       const missing = required.filter((field) => body[field] === undefined || body[field] === null || body[field] === '');
       if (missing.length) return sendJson(res, 400, { error: `Missing fields: ${missing.join(', ')}` });
 
-      const parsed = parseSwiftMessage(body.raw_message, body.message_type);
-      const record = insertSwiftMessage(body, parsed);
+      const canonical = normalizeMessage(body.raw_message, body.message_type);
+      const record = insertSwiftMessage(body, canonical.normalized_payload);
+      const canonicalRecord = upsertCanonicalMessage(record.id, canonical);
       log('info', 'SWIFT message ingested', { external_ref: body.external_ref, mt: body.message_type });
-      return sendJson(res, 200, { data: record });
+      return sendJson(res, 200, { data: { ...record, canonical_message: canonicalRecord } });
+    }
+
+
+    if (req.method === 'GET' && req.url?.startsWith('/canonical/')) {
+      const id = req.url.split('/').filter(Boolean)[1];
+      const canonical = getCanonicalById(id);
+      if (!canonical) return sendJson(res, 404, { error: 'Canonical message not found' });
+      return sendJson(res, 200, { data: canonical });
+    }
+
+    if (req.method === 'GET' && req.url?.startsWith('/messages/') && req.url?.endsWith('/canonical')) {
+      const pathParts = req.url.split('/').filter(Boolean);
+      const swiftId = pathParts[1];
+      const canonical = getCanonicalBySwiftMessageId(swiftId);
+      if (!canonical) return sendJson(res, 404, { error: 'Canonical message not found' });
+      return sendJson(res, 200, { data: canonical });
     }
 
     if (req.method === 'GET' && req.url?.startsWith('/api/swift-messages')) {
@@ -78,6 +104,52 @@ export const app = createServer(async (req, res) => {
         to_date: url.searchParams.get('to_date') || undefined
       });
       return sendJson(res, 200, { data: messages });
+    }
+
+    if (req.method === 'GET' && req.url?.startsWith('/work-items')) {
+      const url = new URL(req.url, `http://localhost:${port}`);
+      const pathParts = url.pathname.split('/').filter(Boolean);
+      if (pathParts.length === 2) {
+        const detail = getWorkItemById(pathParts[1]);
+        if (!detail) return sendJson(res, 404, { error: 'Work item not found' });
+        return sendJson(res, 200, { data: detail });
+      }
+
+      const items = listWorkItems({
+        state: url.searchParams.get('state') || undefined,
+        domain: url.searchParams.get('domain') || undefined,
+        queue: url.searchParams.get('queue') || undefined,
+        priority: url.searchParams.get('priority') || undefined,
+        ageing: url.searchParams.get('ageing') || undefined
+      });
+      return sendJson(res, 200, { data: items });
+    }
+
+    if (req.method === 'POST' && req.url?.match(/^\/work-items\/\d+\/assign$/)) {
+      const workItemId = Number(req.url.split('/')[2]);
+      const body = await parseBody(req);
+      const assigned = assignWorkItem(workItemId, {
+        ownerUserId: body.owner_user_id ?? null,
+        queueId: body.queue_id ?? null
+      });
+      if (!assigned) return sendJson(res, 404, { error: 'Work item not found' });
+      return sendJson(res, 200, { data: assigned });
+    }
+
+    if (req.method === 'POST' && req.url?.match(/^\/work-items\/\d+\/transition$/)) {
+      const workItemId = Number(req.url.split('/')[2]);
+      const body = await parseBody(req);
+      if (!body.state || !WORK_ITEM_STATES.includes(body.state)) {
+        return sendJson(res, 400, { error: 'Invalid state transition target' });
+      }
+
+      const transitioned = transitionWorkItem(workItemId, {
+        state: body.state,
+        actor: body.actor || 'manual_operator',
+        payload: body.payload || {}
+      });
+      if (!transitioned) return sendJson(res, 404, { error: 'Work item not found' });
+      return sendJson(res, 200, { data: transitioned });
     }
 
     if (req.method === 'GET' && serveStatic(req, res)) return;
