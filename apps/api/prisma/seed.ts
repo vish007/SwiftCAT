@@ -70,68 +70,11 @@ async function main() {
     create: { code: 'MT103', description: 'Single customer credit transfer' }
   });
 
-  const tools = [
-    {
-      toolName: 'tool.sanctions.screen',
-      domain: 'sanctions',
-      inputSchema: { type: 'object', required: ['entity'] },
-      outputSchema: { type: 'object', required: ['screened', 'match'] },
-      requiresApproval: true,
-      retryPolicy: { maxAttempts: 2 },
-      enabled: true
-    },
-    {
-      toolName: 'tool.cbs.payment.post',
-      domain: 'cbs',
-      inputSchema: { type: 'object', required: ['paymentId'] },
-      outputSchema: { type: 'object', required: ['posted', 'paymentReference'] },
-      requiresApproval: true,
-      retryPolicy: { maxAttempts: 3 },
-      enabled: true
-    },
-    {
-      toolName: 'tool.trade.case.create',
-      domain: 'trade',
-      inputSchema: { type: 'object', required: ['tradeId'] },
-      outputSchema: { type: 'object', required: ['created', 'caseId'] },
-      requiresApproval: false,
-      retryPolicy: { maxAttempts: 2 },
-      enabled: true
-    },
-    {
-      toolName: 'tool.treasury.nostro.fetch',
-      domain: 'treasury',
-      inputSchema: { type: 'object', required: ['account'] },
-      outputSchema: { type: 'object', required: ['fetched', 'balance'] },
-      requiresApproval: false,
-      retryPolicy: { maxAttempts: 2 },
-      enabled: true
-    },
-    {
-      toolName: 'tool.swift.outbound.prepare',
-      domain: 'swift',
-      inputSchema: { type: 'object', required: ['messageType'] },
-      outputSchema: { type: 'object', required: ['prepared', 'dispatchState'] },
-      requiresApproval: true,
-      retryPolicy: { maxAttempts: 2 },
-      enabled: true
-    }
-  ] as const;
-
-  for (const tool of tools) {
-    await prisma.toolRegistry.upsert({
-      where: { toolName: tool.toolName },
-      update: {
-        domain: tool.domain,
-        inputSchema: tool.inputSchema,
-        outputSchema: tool.outputSchema,
-        requiresApproval: tool.requiresApproval,
-        retryPolicy: tool.retryPolicy,
-        enabled: tool.enabled
-      },
-      create: tool
-    });
-  }
+  await prisma.workItem.upsert({
+    where: { reference: 'WI-1001' },
+    update: {},
+    create: { reference: 'WI-1001' }
+  });
 }
 
 main()

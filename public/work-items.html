@@ -1,0 +1,60 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="UTF-8" />
+  <title>Work Items</title>
+  <style>
+    body { font-family: Arial, sans-serif; margin: 20px; }
+    .filters { display:flex; gap:8px; margin-bottom: 12px; }
+    .board { display:grid; grid-template-columns: repeat(4, 1fr); gap: 10px; }
+    .column { border:1px solid #ddd; border-radius: 6px; padding:8px; min-height: 120px; }
+    .card { border:1px solid #eee; border-radius:4px; padding:8px; margin-bottom:6px; background:#fafafa; cursor:pointer; }
+    .muted { color:#666; font-size: 12px; }
+  </style>
+</head>
+<body>
+  <h1>Work Items Board</h1>
+  <p><a href="/">← Back to Swift Library</a></p>
+  <div class="filters">
+    <select id="domain">
+      <option value="">All domains</option><option>unknown</option><option>payments</option><option>trade</option><option>reconciliation</option><option>compliance</option>
+    </select>
+    <select id="priority">
+      <option value="">All priorities</option><option>Low</option><option>Medium</option><option>High</option><option>Urgent</option>
+    </select>
+    <input id="ageing" placeholder="Min ageing minutes" type="number" min="0" />
+  </div>
+  <div class="board" id="board"></div>
+
+<script>
+const states = ['RECEIVED','CLASSIFIED','SCREENED','ROUTED','PROCESSING','WAITING_APPROVAL','EXCEPTION','CLOSED'];
+[domain, priority, ageing].forEach((el)=>el.addEventListener('input', load));
+
+async function load() {
+  const params = new URLSearchParams();
+  if (domain.value) params.set('domain', domain.value);
+  if (priority.value) params.set('priority', priority.value);
+  if (ageing.value) params.set('ageing', ageing.value);
+  const res = await fetch('/work-items?' + params.toString());
+  const json = await res.json();
+
+  board.innerHTML = '';
+  states.forEach((state) => {
+    const col = document.createElement('div');
+    col.className = 'column';
+    col.innerHTML = `<h3>${state}</h3>`;
+    json.data.filter((item) => item.state === state).forEach((item) => {
+      const card = document.createElement('div');
+      card.className = 'card';
+      card.innerHTML = `<strong>WI-${item.id}</strong> ${item.external_ref}<div class="muted">${item.mt_type} • ${item.priority} • ${item.ageing_minutes}m</div>`;
+      card.onclick = () => { window.location.href = `/work-item.html?id=${item.id}`; };
+      col.appendChild(card);
+    });
+    board.appendChild(col);
+  });
+}
+
+load();
+</script>
+</body>
+</html>

@@ -1,6 +1,8 @@
 import bcrypt from 'bcryptjs';
 import type { FastifyInstance } from 'fastify';
+import { AgentRunStatus, AgentStepStatus, type Prisma } from '@prisma/client';
 import { loginSchema } from '@swiftcat/shared';
+import { defaultStepStatus, runAgentForWorkItem } from './agent-runtime.js';
 import { prisma } from './prisma.js';
 import { ToolRuntime } from './tools.js';
 
@@ -107,6 +109,134 @@ export async function registerRoutes(app: FastifyInstance) {
   }, async () => {
     const queues = await prisma.queue.findMany({ orderBy: { id: 'asc' } });
     return { data: queues };
+  });
+
+  app.get('/work-items', {
+    preHandler: [app.verifyJwt],
+    schema: { tags: ['work-items'], summary: 'List work items', security: [{ bearerAuth: [] }] }
+  }, async () => {
+    const workItems = await prisma.workItem.findMany({ orderBy: { id: 'asc' } });
+    return { data: workItems };
+  });
+
+  app.get('/work-items/:id', {
+    preHandler: [app.verifyJwt],
+    schema: { tags: ['work-items'], summary: 'Get work item detail', security: [{ bearerAuth: [] }] }
+  }, async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const workItem = await prisma.workItem.findUnique({ where: { id: Number(id) } });
+    if (!workItem) {
+      return reply.code(404).send({ message: 'Work item not found' });
+    }
+    return { data: workItem };
+  });
+
+  app.post('/agent/run/:workItemId', {
+    preHandler: [app.verifyJwt],
+    schema: { tags: ['agent'], summary: 'Run agent runtime for a work item', security: [{ bearerAuth: [] }] }
+  }, async (request, reply) => {
+    const { workItemId } = request.params as { workItemId: string };
+    const id = Number(workItemId);
+    if (!Number.isInteger(id)) {
+      return reply.code(400).send({ message: 'Invalid work item id' });
+    }
+
+    const workItem = await prisma.workItem.findUnique({ where: { id } });
+    if (!workItem) {
+      return reply.code(404).send({ message: 'Work item not found' });
+    }
+
+    const starter = await prisma.user.findUnique({ where: { username: 'swiftcat_ai' } });
+    if (!starter) {
+      return reply.code(500).send({ message: 'swiftcat_ai user is missing' });
+    }
+
+    const result = await runAgentForWorkItem({
+      workItemId: id,
+      startedByUserId: starter.id,
+      store: {
+        createRun: ({ workItemId: inputWorkItemId, startedByUserId }) => prisma.agentRun.create({
+          data: { workItemId: inputWorkItemId, startedByUserId, status: AgentRunStatus.RUNNING },
+          select: { id: true }
+        }),
+        markRunSucceeded: (runId) => prisma.agentRun.update({
+          where: { id: runId },
+          data: { status: AgentRunStatus.SUCCEEDED, finishedAt: new Date(), error: null }
+        }).then(() => undefined),
+        markRunFailed: (runId, error) => prisma.agentRun.update({
+          where: { id: runId },
+          data: { status: AgentRunStatus.FAILED, finishedAt: new Date(), error: error as Prisma.JsonObject }
+        }).then(() => undefined),
+        createStep: ({ runId, stepName, stepType, input, rationale }) => prisma.agentStep.create({
+          data: {
+            agentRunId: runId,
+            stepName,
+            stepType,
+            input: (input ?? null) as Prisma.JsonObject | null,
+            rationale,
+            status: defaultStepStatus
+          },
+          select: { id: true }
+        }),
+        markStepSucceeded: (stepId, output) => prisma.agentStep.update({
+          where: { id: stepId },
+          data: {
+            status: AgentStepStatus.SUCCEEDED,
+            output: (output ?? null) as Prisma.JsonObject | null,
+            finishedAt: new Date()
+          }
+        }).then(() => undefined),
+        markStepFailed: (stepId, error) => prisma.agentStep.update({
+          where: { id: stepId },
+          data: {
+            status: AgentStepStatus.FAILED,
+            output: error as Prisma.JsonObject,
+            finishedAt: new Date()
+          }
+        }).then(() => undefined),
+        updateWorkItemState: (workItemIdToUpdate, nextState) => prisma.workItem.update({
+          where: { id: workItemIdToUpdate },
+          data: { status: nextState }
+        }).then(() => undefined)
+      }
+    });
+
+    return { data: result };
+  });
+
+  app.get('/agent/runs', {
+    preHandler: [app.verifyJwt],
+    schema: { tags: ['agent'], summary: 'List agent runs by work item', security: [{ bearerAuth: [] }] }
+  }, async (request, reply) => {
+    const { workItemId } = request.query as { workItemId?: string };
+    if (!workItemId) {
+      return reply.code(400).send({ message: 'workItemId query parameter is required' });
+    }
+    const id = Number(workItemId);
+    if (!Number.isInteger(id)) {
+      return reply.code(400).send({ message: 'Invalid workItemId' });
+    }
+    const runs = await prisma.agentRun.findMany({ where: { workItemId: id }, orderBy: { startedAt: 'desc' } });
+    return { data: runs };
+  });
+
+  app.get('/agent/runs/:id/steps', {
+    preHandler: [app.verifyJwt],
+    schema: { tags: ['agent'], summary: 'List steps for an agent run', security: [{ bearerAuth: [] }] }
+  }, async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const runId = Number(id);
+    if (!Number.isInteger(runId)) {
+      return reply.code(400).send({ message: 'Invalid run id' });
+    }
+
+    const run = await prisma.agentRun.findUnique({ where: { id: runId } });
+    if (!run) {
+      return reply.code(404).send({ message: 'Run not found' });
+    }
+
+    const steps = await prisma.agentStep.findMany({ where: { agentRunId: runId }, orderBy: { startedAt: 'asc' } });
+    return { data: steps };
   });
 
   app.post('/actions/audit', {
