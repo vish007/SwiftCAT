@@ -1,15 +1,14 @@
 import { createServer } from 'node:http';
 import { readFileSync, existsSync } from 'node:fs';
 import { extname, join } from 'node:path';
-import { parseSwiftMessage } from './parser.js';
+import { normalizeMessage } from './normalization.js';
 import {
   insertSwiftMessage,
+  upsertCanonicalMessage,
   listSwiftMessages,
   getSwiftMessageById,
-  listWorkItems,
-  getWorkItemById,
-  assignWorkItem,
-  transitionWorkItem
+  getCanonicalById,
+  getCanonicalBySwiftMessageId
 } from './repository.js';
 
 const port = Number(process.env.PORT || 3000);
@@ -65,10 +64,27 @@ export const app = createServer(async (req, res) => {
       const missing = required.filter((field) => body[field] === undefined || body[field] === null || body[field] === '');
       if (missing.length) return sendJson(res, 400, { error: `Missing fields: ${missing.join(', ')}` });
 
-      const parsed = parseSwiftMessage(body.raw_message, body.message_type);
-      const record = insertSwiftMessage(body, parsed);
+      const canonical = normalizeMessage(body.raw_message, body.message_type);
+      const record = insertSwiftMessage(body, canonical.normalized_payload);
+      const canonicalRecord = upsertCanonicalMessage(record.id, canonical);
       log('info', 'SWIFT message ingested', { external_ref: body.external_ref, mt: body.message_type });
-      return sendJson(res, 200, { data: record });
+      return sendJson(res, 200, { data: { ...record, canonical_message: canonicalRecord } });
+    }
+
+
+    if (req.method === 'GET' && req.url?.startsWith('/canonical/')) {
+      const id = req.url.split('/').filter(Boolean)[1];
+      const canonical = getCanonicalById(id);
+      if (!canonical) return sendJson(res, 404, { error: 'Canonical message not found' });
+      return sendJson(res, 200, { data: canonical });
+    }
+
+    if (req.method === 'GET' && req.url?.startsWith('/messages/') && req.url?.endsWith('/canonical')) {
+      const pathParts = req.url.split('/').filter(Boolean);
+      const swiftId = pathParts[1];
+      const canonical = getCanonicalBySwiftMessageId(swiftId);
+      if (!canonical) return sendJson(res, 404, { error: 'Canonical message not found' });
+      return sendJson(res, 200, { data: canonical });
     }
 
     if (req.method === 'GET' && req.url?.startsWith('/api/swift-messages')) {
