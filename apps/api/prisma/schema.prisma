@@ -69,3 +69,54 @@ model SwiftMtCode {
 
   @@map("swift_mt_codes")
 }
+
+model ToolRegistry {
+  toolName         String   @id @map("tool_name")
+  domain           String
+  inputSchema      Json     @map("input_schema")
+  outputSchema     Json     @map("output_schema")
+  requiresApproval Boolean  @default(false) @map("requires_approval")
+  retryPolicy      Json     @map("retry_policy")
+  enabled          Boolean  @default(true)
+  invocations      ToolInvocation[]
+
+  @@map("tool_registry")
+}
+
+model AgentRun {
+  id        Int         @id @default(autoincrement())
+  status    String
+  createdAt DateTime    @default(now()) @map("created_at")
+  steps     AgentStep[]
+
+  @@map("agent_runs")
+}
+
+model AgentStep {
+  id          Int              @id @default(autoincrement())
+  runId       Int              @map("run_id")
+  stepType    String           @map("step_type")
+  status      String
+  createdAt   DateTime         @default(now()) @map("created_at")
+  run         AgentRun         @relation(fields: [runId], references: [id])
+  invocations ToolInvocation[]
+
+  @@map("agent_steps")
+}
+
+model ToolInvocation {
+  id             Int        @id @default(autoincrement())
+  agentStepId    Int        @map("agent_step_id")
+  toolName       String     @map("tool_name")
+  idempotencyKey String     @map("idempotency_key")
+  request        Json
+  response       Json?
+  status         String
+  attemptCount   Int        @default(1) @map("attempt_count")
+  createdAt      DateTime   @default(now()) @map("created_at")
+  agentStep      AgentStep  @relation(fields: [agentStepId], references: [id])
+  tool           ToolRegistry @relation(fields: [toolName], references: [toolName])
+
+  @@unique([agentStepId, idempotencyKey])
+  @@map("tool_invocations")
+}
