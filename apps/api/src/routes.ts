@@ -4,8 +4,11 @@ import { AgentRunStatus, AgentStepStatus, type Prisma } from '@prisma/client';
 import { loginSchema } from '@swiftcat/shared';
 import { defaultStepStatus, runAgentForWorkItem } from './agent-runtime.js';
 import { prisma } from './prisma.js';
+import { ToolRuntime } from './tools.js';
 
 export async function registerRoutes(app: FastifyInstance) {
+  const toolRuntime = new ToolRuntime(prisma);
+
   app.get('/health', {
     schema: { tags: ['system'], summary: 'Health check' }
   }, async () => ({ ok: true }));
@@ -271,4 +274,70 @@ export async function registerRoutes(app: FastifyInstance) {
     preHandler: [app.verifyJwt, app.authorize(['Compliance'])],
     schema: { tags: ['admin'], summary: 'Compliance-only route', security: [{ bearerAuth: [] }] }
   }, async () => ({ message: 'Compliance access granted' }));
+
+  app.get('/tools', {
+    preHandler: [app.verifyJwt],
+    schema: { tags: ['tools'], summary: 'List registered tools', security: [{ bearerAuth: [] }] }
+  }, async () => {
+    const tools = await prisma.toolRegistry.findMany({ orderBy: { toolName: 'asc' } });
+    return { data: tools };
+  });
+
+  app.post('/agent/runs/tool-call', {
+    preHandler: [app.verifyJwt],
+    schema: {
+      tags: ['agent'],
+      summary: 'Create an agent run with a TOOL_CALL step',
+      security: [{ bearerAuth: [] }],
+      body: {
+        type: 'object',
+        required: ['toolName', 'request', 'idempotencyKey'],
+        properties: {
+          toolName: { type: 'string' },
+          request: { type: 'object', additionalProperties: true },
+          idempotencyKey: { type: 'string' }
+        }
+      }
+    }
+  }, async (request, reply) => {
+    const body = request.body as {
+      toolName: string;
+      request: Record<string, unknown>;
+      idempotencyKey: string;
+    };
+
+    const tool = await prisma.toolRegistry.findUnique({ where: { toolName: body.toolName } });
+    if (!tool) {
+      return reply.code(404).send({ message: `Tool ${body.toolName} not found` });
+    }
+
+    const run = await prisma.agentRun.create({ data: { status: 'IN_PROGRESS' } });
+    const step = await prisma.agentStep.create({
+      data: { runId: run.id, stepType: 'TOOL_CALL', status: 'IN_PROGRESS' }
+    });
+
+    const invocation = await toolRuntime.invokeTool({
+      agentStepId: step.id,
+      toolName: body.toolName,
+      idempotencyKey: body.idempotencyKey,
+      request: body.request
+    });
+
+    await prisma.agentStep.update({
+      where: { id: step.id },
+      data: { status: invocation.status === 'SUCCESS' ? 'COMPLETED' : 'FAILED' }
+    });
+    await prisma.agentRun.update({
+      where: { id: run.id },
+      data: { status: invocation.status === 'SUCCESS' ? 'COMPLETED' : 'FAILED' }
+    });
+
+    return {
+      data: {
+        runId: run.id,
+        stepId: step.id,
+        invocation
+      }
+    };
+  });
 }
