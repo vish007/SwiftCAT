@@ -7,6 +7,15 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
+enum WorkItemState {
+  INGESTED
+  CLASSIFIED
+  SCREENED
+  ROUTED
+  EXCEPTION
+  READY
+}
+
 model User {
   id             Int             @id @default(autoincrement())
   username       String          @unique
@@ -41,9 +50,10 @@ model Permission {
 }
 
 model Queue {
-  id        Int      @id @default(autoincrement())
-  name      String   @unique
-  createdAt DateTime @default(now()) @map("created_at")
+  id        Int        @id @default(autoincrement())
+  name      String     @unique
+  createdAt DateTime   @default(now()) @map("created_at")
+  workItems WorkItem[]
 
   @@map("queues")
 }
@@ -68,4 +78,77 @@ model SwiftMtCode {
   createdAt   DateTime @default(now()) @map("created_at")
 
   @@map("swift_mt_codes")
+}
+
+model WorkItem {
+  id               Int                       @id @default(autoincrement())
+  messageType      String                    @map("message_type")
+  rawMessage       String                    @map("raw_message")
+  domain           String?
+  priority         Int                       @default(50)
+  rationale        String?
+  confidence       Float?
+  state            WorkItemState             @default(INGESTED)
+  queueId          Int?                      @map("queue_id")
+  queue            Queue?                    @relation(fields: [queueId], references: [id])
+  createdAt        DateTime                  @default(now()) @map("created_at")
+  updatedAt        DateTime                  @updatedAt @map("updated_at")
+  screeningResult  ScreeningResult?
+  policyDecisions  PolicyDecision[]
+  stateTransitions WorkItemStateTransition[]
+  agentSteps       AgentStep[]
+
+  @@map("work_items")
+}
+
+model AgentStep {
+  id          Int      @id @default(autoincrement())
+  workItemId  Int      @map("work_item_id")
+  workItem    WorkItem @relation(fields: [workItemId], references: [id])
+  stepName    String   @map("step_name")
+  status      String
+  rationale   String?
+  createdAt   DateTime @default(now()) @map("created_at")
+  policyDecisions PolicyDecision[]
+
+  @@map("agent_steps")
+}
+
+model ScreeningResult {
+  id          Int      @id @default(autoincrement())
+  workItemId  Int      @unique @map("work_item_id")
+  workItem    WorkItem @relation(fields: [workItemId], references: [id])
+  toolName    String   @map("tool_name")
+  hit         Boolean
+  score       Float
+  riskFactors String   @map("risk_factors")
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  @@map("screening_results")
+}
+
+model PolicyDecision {
+  id          Int       @id @default(autoincrement())
+  workItemId  Int       @map("work_item_id")
+  workItem    WorkItem  @relation(fields: [workItemId], references: [id])
+  agentStepId Int?      @map("agent_step_id")
+  agentStep   AgentStep? @relation(fields: [agentStepId], references: [id])
+  policyName  String    @map("policy_name")
+  allow       Boolean
+  rationale   String
+  createdAt   DateTime  @default(now()) @map("created_at")
+
+  @@map("policy_decisions")
+}
+
+model WorkItemStateTransition {
+  id         Int           @id @default(autoincrement())
+  workItemId Int           @map("work_item_id")
+  workItem   WorkItem      @relation(fields: [workItemId], references: [id])
+  fromState  WorkItemState @map("from_state")
+  toState    WorkItemState @map("to_state")
+  rationale  String
+  createdAt  DateTime      @default(now()) @map("created_at")
+
+  @@map("work_item_state_transitions")
 }

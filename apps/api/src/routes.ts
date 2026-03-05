@@ -2,6 +2,7 @@ import bcrypt from 'bcryptjs';
 import type { FastifyInstance } from 'fastify';
 import { loginSchema } from '@swiftcat/shared';
 import { prisma } from './prisma.js';
+import { runPipeline } from './pipeline.js';
 
 export async function registerRoutes(app: FastifyInstance) {
   app.get('/health', {
@@ -104,6 +105,77 @@ export async function registerRoutes(app: FastifyInstance) {
   }, async () => {
     const queues = await prisma.queue.findMany({ orderBy: { id: 'asc' } });
     return { data: queues };
+  });
+
+  app.post('/work-items/ingest', {
+    preHandler: [app.verifyJwt],
+    schema: {
+      tags: ['work-items'],
+      summary: 'Ingest message and execute classify/screen/policy pipeline',
+      security: [{ bearerAuth: [] }],
+      body: {
+        type: 'object',
+        required: ['messageType', 'rawMessage'],
+        properties: {
+          messageType: { type: 'string' },
+          rawMessage: { type: 'string' }
+        }
+      }
+    }
+  }, async (request) => {
+    const body = request.body as { messageType: string; rawMessage: string };
+    const incomingQueue = await prisma.queue.upsert({
+      where: { name: 'incoming-swift' },
+      update: {},
+      create: { name: 'incoming-swift' }
+    });
+
+    const created = await prisma.workItem.create({
+      data: {
+        messageType: body.messageType,
+        rawMessage: body.rawMessage,
+        queueId: incomingQueue.id
+      }
+    });
+
+    const processed = await runPipeline(prisma, created.id);
+    return { data: processed };
+  });
+
+  app.get('/work-items', {
+    preHandler: [app.verifyJwt],
+    schema: { tags: ['work-items'], summary: 'List work items', security: [{ bearerAuth: [] }] }
+  }, async () => {
+    const items = await prisma.workItem.findMany({
+      include: {
+        queue: true,
+        policyDecisions: { orderBy: { createdAt: 'desc' }, take: 1 },
+        screeningResult: true
+      },
+      orderBy: { createdAt: 'desc' }
+    });
+    return { data: items };
+  });
+
+  app.get('/work-items/:id', {
+    preHandler: [app.verifyJwt],
+    schema: { tags: ['work-items'], summary: 'Work item detail', security: [{ bearerAuth: [] }] }
+  }, async (request, reply) => {
+    const id = Number((request.params as { id: string }).id);
+    const item = await prisma.workItem.findUnique({
+      where: { id },
+      include: {
+        queue: true,
+        screeningResult: true,
+        policyDecisions: { orderBy: { createdAt: 'desc' } },
+        agentSteps: { orderBy: { createdAt: 'asc' } },
+        stateTransitions: { orderBy: { createdAt: 'asc' } }
+      }
+    });
+    if (!item) {
+      return reply.code(404).send({ message: 'Work item not found' });
+    }
+    return { data: item };
   });
 
   app.post('/actions/audit', {
