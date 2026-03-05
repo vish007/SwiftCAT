@@ -1,26 +1,14 @@
 import bcrypt from 'bcryptjs';
 import type { FastifyInstance } from 'fastify';
-import type { ActionType, Approval, Prisma } from '@prisma/client';
+import { AgentRunStatus, AgentStepStatus, type Prisma } from '@prisma/client';
 import { loginSchema } from '@swiftcat/shared';
+import { defaultStepStatus, runAgentForWorkItem } from './agent-runtime.js';
 import { prisma } from './prisma.js';
-import {
-  executeOutboundSwiftSend,
-  getApprovalPolicy,
-  isApprovalSatisfied,
-  logAgentStep,
-  logMessageAction,
-  requestedByFromRole
-} from './approvalWorkflow.js';
-
-function canApproveAsMaker(role: string) {
-  return role === 'Maker';
-}
-
-function canApproveAsChecker(role: string) {
-  return role === 'Checker' || role === 'Compliance';
-}
+import { ToolRuntime } from './tools.js';
 
 export async function registerRoutes(app: FastifyInstance) {
+  const toolRuntime = new ToolRuntime(prisma);
+
   app.get('/health', {
     schema: { tags: ['system'], summary: 'Health check' }
   }, async () => ({ ok: true }));
@@ -123,216 +111,132 @@ export async function registerRoutes(app: FastifyInstance) {
     return { data: queues };
   });
 
-  app.post('/work-items/propose', {
-    preHandler: [app.verifyJwt],
-    schema: {
-      tags: ['work-items'],
-      summary: 'Propose gated action and create approval request when needed',
-      security: [{ bearerAuth: [] }]
-    }
-  }, async (request, reply) => {
-    if (!request.authUser) {
-      return reply.code(401).send({ message: 'Unauthorized' });
-    }
-
-    const body = request.body as {
-      actionType: ActionType;
-      payload: Prisma.JsonObject;
-      isHighRisk?: boolean;
-    };
-
-    const requestedBy = requestedByFromRole(request.authUser.role);
-    const policy = getApprovalPolicy(body.actionType, body.isHighRisk ?? false);
-
-    const workItem = await prisma.workItem.create({
-      data: {
-        actionType: body.actionType,
-        payload: body.payload,
-        state: policy.requireMaker || policy.requireChecker ? 'WAITING_APPROVAL' : 'APPROVED',
-        requestedBy,
-        createdById: request.authUser.id
-      }
-    });
-
-    await logAgentStep({
-      workItemId: workItem.id,
-      stepType: 'ACTION_PROPOSED',
-      details: `Proposed ${body.actionType} with policy maker=${policy.requireMaker} checker=${policy.requireChecker}`,
-      performedBy: request.authUser.id
-    });
-
-    await logMessageAction({
-      action: 'WORK_ITEM_PROPOSED',
-      entityType: 'work_item',
-      entityId: String(workItem.id),
-      details: JSON.stringify(body.payload),
-      performedBy: request.authUser.id
-    });
-
-    let approval: Approval | null = null;
-    if (policy.requireMaker || policy.requireChecker) {
-      approval = await prisma.approval.create({
-        data: {
-          workItemId: workItem.id,
-          requestedBy,
-          actionType: body.actionType,
-          payload: body.payload,
-          state: 'PENDING'
-        }
-      });
-
-      await logAgentStep({
-        workItemId: workItem.id,
-        stepType: 'WAITING_APPROVAL',
-        details: 'Approval request created and queued.',
-        performedBy: request.authUser.id
-      });
-    }
-
-    return { data: { workItem, approval, policy } };
-  });
-
   app.get('/work-items', {
     preHandler: [app.verifyJwt],
-    schema: { tags: ['work-items'], summary: 'List work items with approvals', security: [{ bearerAuth: [] }] }
+    schema: { tags: ['work-items'], summary: 'List work items', security: [{ bearerAuth: [] }] }
   }, async () => {
-    const workItems = await prisma.workItem.findMany({
-      include: {
-        approvals: true
-      },
-      orderBy: { id: 'desc' }
-    });
+    const workItems = await prisma.workItem.findMany({ orderBy: { id: 'asc' } });
     return { data: workItems };
   });
 
-  app.get('/approvals/inbox', {
+  app.get('/work-items/:id', {
     preHandler: [app.verifyJwt],
-    schema: { tags: ['approvals'], summary: 'Maker/checker approval inbox', security: [{ bearerAuth: [] }] }
+    schema: { tags: ['work-items'], summary: 'Get work item detail', security: [{ bearerAuth: [] }] }
   }, async (request, reply) => {
-    if (!request.authUser) {
-      return reply.code(401).send({ message: 'Unauthorized' });
+    const { id } = request.params as { id: string };
+    const workItem = await prisma.workItem.findUnique({ where: { id: Number(id) } });
+    if (!workItem) {
+      return reply.code(404).send({ message: 'Work item not found' });
     }
-
-    const approvals = await prisma.approval.findMany({
-      where: { state: 'PENDING' },
-      include: { workItem: true },
-      orderBy: { createdAt: 'asc' }
-    });
-
-    const role = request.authUser.role;
-    const filtered = approvals.filter((approval) => {
-      const policy = getApprovalPolicy(approval.actionType, false);
-      if (canApproveAsMaker(role) && policy.requireMaker && !approval.makerUserId) {
-        return true;
-      }
-      if (canApproveAsChecker(role) && policy.requireChecker && !approval.checkerUserId) {
-        return true;
-      }
-      return false;
-    });
-
-    return { data: filtered };
+    return { data: workItem };
   });
 
-  app.post('/approvals/:id/decision', {
+  app.post('/agent/run/:workItemId', {
     preHandler: [app.verifyJwt],
-    schema: { tags: ['approvals'], summary: 'Approve or reject approval request', security: [{ bearerAuth: [] }] }
+    schema: { tags: ['agent'], summary: 'Run agent runtime for a work item', security: [{ bearerAuth: [] }] }
   }, async (request, reply) => {
-    if (!request.authUser) {
-      return reply.code(401).send({ message: 'Unauthorized' });
+    const { workItemId } = request.params as { workItemId: string };
+    const id = Number(workItemId);
+    if (!Number.isInteger(id)) {
+      return reply.code(400).send({ message: 'Invalid work item id' });
     }
 
-    const params = request.params as { id: string };
-    const body = request.body as { decision: Approval['state'] };
-    const approvalId = Number(params.id);
-
-    const existing = await prisma.approval.findUnique({ where: { id: approvalId }, include: { workItem: true } });
-    if (!existing) {
-      return reply.code(404).send({ message: 'Approval not found' });
-    }
-    if (existing.state !== 'PENDING') {
-      return reply.code(400).send({ message: 'Approval already decided' });
+    const workItem = await prisma.workItem.findUnique({ where: { id } });
+    if (!workItem) {
+      return reply.code(404).send({ message: 'Work item not found' });
     }
 
-    const policy = getApprovalPolicy(existing.actionType, false);
-    const role = request.authUser.role;
-    const updates: Prisma.ApprovalUpdateInput = {};
+    const starter = await prisma.user.findUnique({ where: { username: 'swiftcat_ai' } });
+    if (!starter) {
+      return reply.code(500).send({ message: 'swiftcat_ai user is missing' });
+    }
 
-    if (body.decision === 'REJECTED') {
-      updates.state = 'REJECTED';
-      updates.decidedAt = new Date();
-      if (canApproveAsMaker(role) && !existing.makerUserId) {
-        updates.makerUser = { connect: { id: request.authUser.id } };
-      } else if (canApproveAsChecker(role) && !existing.checkerUserId) {
-        updates.checkerUser = { connect: { id: request.authUser.id } };
-      } else {
-        return reply.code(403).send({ message: 'Role cannot decide this approval' });
+    const result = await runAgentForWorkItem({
+      workItemId: id,
+      startedByUserId: starter.id,
+      store: {
+        createRun: ({ workItemId: inputWorkItemId, startedByUserId }) => prisma.agentRun.create({
+          data: { workItemId: inputWorkItemId, startedByUserId, status: AgentRunStatus.RUNNING },
+          select: { id: true }
+        }),
+        markRunSucceeded: (runId) => prisma.agentRun.update({
+          where: { id: runId },
+          data: { status: AgentRunStatus.SUCCEEDED, finishedAt: new Date(), error: null }
+        }).then(() => undefined),
+        markRunFailed: (runId, error) => prisma.agentRun.update({
+          where: { id: runId },
+          data: { status: AgentRunStatus.FAILED, finishedAt: new Date(), error: error as Prisma.JsonObject }
+        }).then(() => undefined),
+        createStep: ({ runId, stepName, stepType, input, rationale }) => prisma.agentStep.create({
+          data: {
+            agentRunId: runId,
+            stepName,
+            stepType,
+            input: (input ?? null) as Prisma.JsonObject | null,
+            rationale,
+            status: defaultStepStatus
+          },
+          select: { id: true }
+        }),
+        markStepSucceeded: (stepId, output) => prisma.agentStep.update({
+          where: { id: stepId },
+          data: {
+            status: AgentStepStatus.SUCCEEDED,
+            output: (output ?? null) as Prisma.JsonObject | null,
+            finishedAt: new Date()
+          }
+        }).then(() => undefined),
+        markStepFailed: (stepId, error) => prisma.agentStep.update({
+          where: { id: stepId },
+          data: {
+            status: AgentStepStatus.FAILED,
+            output: error as Prisma.JsonObject,
+            finishedAt: new Date()
+          }
+        }).then(() => undefined),
+        updateWorkItemState: (workItemIdToUpdate, nextState) => prisma.workItem.update({
+          where: { id: workItemIdToUpdate },
+          data: { status: nextState }
+        }).then(() => undefined)
       }
-    } else {
-      if (canApproveAsMaker(role) && policy.requireMaker && !existing.makerUserId) {
-        updates.makerUser = { connect: { id: request.authUser.id } };
-      } else if (canApproveAsChecker(role) && policy.requireChecker && !existing.checkerUserId) {
-        if (existing.makerUserId === request.authUser.id) {
-          return reply.code(400).send({ message: 'Maker and checker must be different users' });
-        }
-        updates.checkerUser = { connect: { id: request.authUser.id } };
-      } else {
-        return reply.code(403).send({ message: 'Role cannot approve at this stage' });
-      }
+    });
+
+    return { data: result };
+  });
+
+  app.get('/agent/runs', {
+    preHandler: [app.verifyJwt],
+    schema: { tags: ['agent'], summary: 'List agent runs by work item', security: [{ bearerAuth: [] }] }
+  }, async (request, reply) => {
+    const { workItemId } = request.query as { workItemId?: string };
+    if (!workItemId) {
+      return reply.code(400).send({ message: 'workItemId query parameter is required' });
+    }
+    const id = Number(workItemId);
+    if (!Number.isInteger(id)) {
+      return reply.code(400).send({ message: 'Invalid workItemId' });
+    }
+    const runs = await prisma.agentRun.findMany({ where: { workItemId: id }, orderBy: { startedAt: 'desc' } });
+    return { data: runs };
+  });
+
+  app.get('/agent/runs/:id/steps', {
+    preHandler: [app.verifyJwt],
+    schema: { tags: ['agent'], summary: 'List steps for an agent run', security: [{ bearerAuth: [] }] }
+  }, async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const runId = Number(id);
+    if (!Number.isInteger(runId)) {
+      return reply.code(400).send({ message: 'Invalid run id' });
     }
 
-    const updated = await prisma.approval.update({
-      where: { id: approvalId },
-      data: updates
-    });
-
-    const satisfied = body.decision === 'APPROVED' && isApprovalSatisfied(updated, policy);
-    const approvalState: Approval['state'] = body.decision === 'REJECTED'
-      ? 'REJECTED'
-      : satisfied
-        ? 'APPROVED'
-        : 'PENDING';
-
-    const finalApproval = await prisma.approval.update({
-      where: { id: approvalId },
-      data: {
-        state: approvalState,
-        decidedAt: approvalState === 'PENDING' ? null : new Date()
-      },
-      include: { workItem: true }
-    });
-
-    await logMessageAction({
-      action: `APPROVAL_${body.decision}`,
-      entityType: 'approval',
-      entityId: String(finalApproval.id),
-      details: `maker=${finalApproval.makerUserId ?? 'none'} checker=${finalApproval.checkerUserId ?? 'none'} state=${finalApproval.state}`,
-      performedBy: request.authUser.id
-    });
-    await logAgentStep({
-      workItemId: finalApproval.workItemId,
-      stepType: `APPROVAL_${body.decision}`,
-      details: `Decision by ${request.authUser.username} (${role})`,
-      performedBy: request.authUser.id
-    });
-
-    if (approvalState === 'REJECTED') {
-      await prisma.workItem.update({ where: { id: finalApproval.workItemId }, data: { state: 'REJECTED' } });
+    const run = await prisma.agentRun.findUnique({ where: { id: runId } });
+    if (!run) {
+      return reply.code(404).send({ message: 'Run not found' });
     }
 
-    if (approvalState === 'APPROVED') {
-      const workItem = await prisma.workItem.update({
-        where: { id: finalApproval.workItemId },
-        data: { state: 'APPROVED' }
-      });
-
-      if (workItem.actionType === 'OUTBOUND_SWIFT_SEND') {
-        await executeOutboundSwiftSend(workItem, { id: request.authUser.id });
-        await prisma.workItem.update({ where: { id: workItem.id }, data: { state: 'EXECUTED' } });
-      }
-    }
-
-    return { data: finalApproval };
+    const steps = await prisma.agentStep.findMany({ where: { agentRunId: runId }, orderBy: { startedAt: 'asc' } });
+    return { data: steps };
   });
 
   app.post('/actions/audit', {
@@ -370,4 +274,70 @@ export async function registerRoutes(app: FastifyInstance) {
     preHandler: [app.verifyJwt, app.authorize(['Compliance'])],
     schema: { tags: ['admin'], summary: 'Compliance-only route', security: [{ bearerAuth: [] }] }
   }, async () => ({ message: 'Compliance access granted' }));
+
+  app.get('/tools', {
+    preHandler: [app.verifyJwt],
+    schema: { tags: ['tools'], summary: 'List registered tools', security: [{ bearerAuth: [] }] }
+  }, async () => {
+    const tools = await prisma.toolRegistry.findMany({ orderBy: { toolName: 'asc' } });
+    return { data: tools };
+  });
+
+  app.post('/agent/runs/tool-call', {
+    preHandler: [app.verifyJwt],
+    schema: {
+      tags: ['agent'],
+      summary: 'Create an agent run with a TOOL_CALL step',
+      security: [{ bearerAuth: [] }],
+      body: {
+        type: 'object',
+        required: ['toolName', 'request', 'idempotencyKey'],
+        properties: {
+          toolName: { type: 'string' },
+          request: { type: 'object', additionalProperties: true },
+          idempotencyKey: { type: 'string' }
+        }
+      }
+    }
+  }, async (request, reply) => {
+    const body = request.body as {
+      toolName: string;
+      request: Record<string, unknown>;
+      idempotencyKey: string;
+    };
+
+    const tool = await prisma.toolRegistry.findUnique({ where: { toolName: body.toolName } });
+    if (!tool) {
+      return reply.code(404).send({ message: `Tool ${body.toolName} not found` });
+    }
+
+    const run = await prisma.agentRun.create({ data: { status: 'IN_PROGRESS' } });
+    const step = await prisma.agentStep.create({
+      data: { runId: run.id, stepType: 'TOOL_CALL', status: 'IN_PROGRESS' }
+    });
+
+    const invocation = await toolRuntime.invokeTool({
+      agentStepId: step.id,
+      toolName: body.toolName,
+      idempotencyKey: body.idempotencyKey,
+      request: body.request
+    });
+
+    await prisma.agentStep.update({
+      where: { id: step.id },
+      data: { status: invocation.status === 'SUCCESS' ? 'COMPLETED' : 'FAILED' }
+    });
+    await prisma.agentRun.update({
+      where: { id: run.id },
+      data: { status: invocation.status === 'SUCCESS' ? 'COMPLETED' : 'FAILED' }
+    });
+
+    return {
+      data: {
+        runId: run.id,
+        stepId: step.id,
+        invocation
+      }
+    };
+  });
 }

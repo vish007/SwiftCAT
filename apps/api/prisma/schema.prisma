@@ -8,20 +8,47 @@ datasource db {
 }
 
 model User {
-  id               Int             @id @default(autoincrement())
-  username         String          @unique
-  passwordHash     String          @map("password_hash")
-  refreshToken     String?         @map("refresh_token")
-  createdAt        DateTime        @default(now()) @map("created_at")
-  updatedAt        DateTime        @updatedAt @map("updated_at")
-  roleId           Int             @map("role_id")
-  role             Role            @relation(fields: [roleId], references: [id])
-  messageActions   MessageAction[]
-  approvalsAsMaker Approval[]      @relation("ApprovalMaker")
-  approvalsAsChecker Approval[]    @relation("ApprovalChecker")
-  agentSteps       AgentStep[]
+  id             Int             @id @default(autoincrement())
+  username       String          @unique
+  passwordHash   String          @map("password_hash")
+  refreshToken   String?         @map("refresh_token")
+  createdAt      DateTime        @default(now()) @map("created_at")
+  updatedAt      DateTime        @updatedAt @map("updated_at")
+  roleId         Int             @map("role_id")
+  role           Role            @relation(fields: [roleId], references: [id])
+  messageActions MessageAction[]
+  agentRuns      AgentRun[]      @relation("AgentRunStarter")
 
   @@map("users")
+}
+
+enum WorkItemStatus {
+  RECEIVED
+  CLASSIFIED
+  ROUTED
+}
+
+enum AgentRunStatus {
+  RUNNING
+  SUCCEEDED
+  FAILED
+}
+
+enum AgentStepType {
+  CLASSIFY
+  SCREEN
+  POLICY_CHECK
+  TOOL_CALL
+  STATE_TRANSITION
+  RECON_MATCH
+  CREATE_EXCEPTION
+}
+
+enum AgentStepStatus {
+  STARTED
+  SUCCEEDED
+  FAILED
+  SKIPPED
 }
 
 model Role {
@@ -74,71 +101,43 @@ model SwiftMtCode {
 }
 
 model WorkItem {
-  id          Int            @id @default(autoincrement())
-  actionType  ActionType     @map("action_type")
-  payload     Json
-  state       WorkItemState  @default(WAITING_APPROVAL)
-  requestedBy RequestedBy    @map("requested_by")
-  createdById Int            @map("created_by_id")
-  createdAt   DateTime       @default(now()) @map("created_at")
-  updatedAt   DateTime       @updatedAt @map("updated_at")
-  approvals   Approval[]
-  agentSteps  AgentStep[]
+  id        Int            @id @default(autoincrement())
+  reference String         @unique
+  status    WorkItemStatus @default(RECEIVED)
+  createdAt DateTime       @default(now()) @map("created_at")
+  updatedAt DateTime       @updatedAt @map("updated_at")
+  agentRuns AgentRun[]
 
   @@map("work_items")
 }
 
-model Approval {
-  id            Int           @id @default(autoincrement())
-  workItemId    Int           @map("work_item_id")
-  requestedBy   RequestedBy   @map("requested_by")
-  actionType    ActionType    @map("action_type")
-  payload       Json
-  state         ApprovalState @default(PENDING)
-  makerUserId   Int?          @map("maker_user_id")
-  checkerUserId Int?          @map("checker_user_id")
-  createdAt     DateTime      @default(now()) @map("created_at")
-  decidedAt     DateTime?     @map("decided_at")
-  workItem      WorkItem      @relation(fields: [workItemId], references: [id])
-  makerUser     User?         @relation("ApprovalMaker", fields: [makerUserId], references: [id])
-  checkerUser   User?         @relation("ApprovalChecker", fields: [checkerUserId], references: [id])
+model AgentRun {
+  id              Int            @id @default(autoincrement())
+  workItemId      Int            @map("work_item_id")
+  workItem        WorkItem       @relation(fields: [workItemId], references: [id])
+  status          AgentRunStatus @default(RUNNING)
+  startedAt       DateTime       @default(now()) @map("started_at")
+  finishedAt      DateTime?      @map("finished_at")
+  startedByUserId Int            @map("started_by_user_id")
+  startedByUser   User           @relation("AgentRunStarter", fields: [startedByUserId], references: [id])
+  error           Json?
+  steps           AgentStep[]
 
-  @@map("approvals")
+  @@map("agent_runs")
 }
 
 model AgentStep {
-  id          Int      @id @default(autoincrement())
-  workItemId  Int      @map("work_item_id")
-  stepType    String   @map("step_type")
-  details     String
-  createdAt   DateTime @default(now()) @map("created_at")
-  performedBy Int?     @map("performed_by")
-  workItem    WorkItem @relation(fields: [workItemId], references: [id])
-  user        User?    @relation(fields: [performedBy], references: [id])
+  id         Int             @id @default(autoincrement())
+  agentRunId Int             @map("agent_run_id")
+  agentRun   AgentRun        @relation(fields: [agentRunId], references: [id])
+  stepName   String          @map("step_name")
+  stepType   AgentStepType   @map("step_type")
+  status     AgentStepStatus
+  input      Json?
+  output     Json?
+  rationale  String?
+  startedAt  DateTime        @default(now()) @map("started_at")
+  finishedAt DateTime?       @map("finished_at")
 
   @@map("agent_steps")
-}
-
-enum ApprovalState {
-  PENDING
-  APPROVED
-  REJECTED
-}
-
-enum ActionType {
-  OUTBOUND_SWIFT_SEND
-  POST_TO_CBS
-  CLOSE_CASE
-}
-
-enum RequestedBy {
-  ai
-  user
-}
-
-enum WorkItemState {
-  WAITING_APPROVAL
-  APPROVED
-  EXECUTED
-  REJECTED
 }

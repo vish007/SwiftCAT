@@ -1,0 +1,61 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="UTF-8" />
+  <title>Work Item Detail</title>
+  <style>
+    body { font-family: Arial, sans-serif; margin:20px; }
+    pre { background:#f8f8f8; border:1px solid #ddd; padding:8px; }
+  </style>
+</head>
+<body>
+  <h1 id="title">Work Item</h1>
+  <p><a href="/work-items.html">← Back to board</a></p>
+  <div id="summary"></div>
+  <h3>Assign</h3>
+  <input id="owner" type="number" placeholder="owner_user_id" />
+  <input id="queue" type="number" placeholder="queue_id" />
+  <button id="assignBtn">Assign</button>
+  <h3>Transition</h3>
+  <select id="state">
+    <option>RECEIVED</option><option>CLASSIFIED</option><option>SCREENED</option><option>ROUTED</option><option>PROCESSING</option><option>WAITING_APPROVAL</option><option>EXCEPTION</option><option>CLOSED</option>
+  </select>
+  <button id="transitionBtn">Transition</button>
+  <h3>Events</h3>
+  <pre id="events"></pre>
+
+<script>
+const id = new URLSearchParams(location.search).get('id');
+
+async function load() {
+  const res = await fetch(`/work-items/${id}`);
+  const json = await res.json();
+  const wi = json.data;
+  title.textContent = `Work Item WI-${wi.id}`;
+  summary.innerHTML = `<p>State: <strong>${wi.state}</strong> • Domain: ${wi.domain} • Priority: ${wi.priority}</p><p>Message: ${wi.external_ref} (${wi.mt_type})</p>`;
+  state.value = wi.state;
+  events.textContent = JSON.stringify(wi.events, null, 2);
+}
+
+assignBtn.onclick = async () => {
+  await fetch(`/work-items/${id}/assign`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ owner_user_id: owner.value ? Number(owner.value) : null, queue_id: queue.value ? Number(queue.value) : null })
+  });
+  load();
+};
+
+transitionBtn.onclick = async () => {
+  await fetch(`/work-items/${id}/transition`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ state: state.value, actor: 'ui_operator', payload: { source: 'work-item-detail' } })
+  });
+  load();
+};
+
+load();
+</script>
+</body>
+</html>

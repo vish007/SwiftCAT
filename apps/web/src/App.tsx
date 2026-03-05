@@ -8,23 +8,28 @@ type AuthResponse = {
   user: User;
 };
 
-type ApprovalRecord = {
+type WorkItem = {
   id: number;
-  actionType: string;
-  state: 'PENDING' | 'APPROVED' | 'REJECTED';
-  makerUserId: number | null;
-  checkerUserId: number | null;
-  workItem: {
-    id: number;
-    state: string;
-  };
+  reference: string;
+  status: 'RECEIVED' | 'CLASSIFIED' | 'ROUTED';
 };
 
-type WorkItemRecord = {
+type AgentRun = {
   id: number;
-  actionType: string;
-  state: string;
-  approvals: ApprovalRecord[];
+  workItemId: number;
+  status: 'RUNNING' | 'SUCCEEDED' | 'FAILED';
+  startedAt: string;
+  finishedAt: string | null;
+};
+
+type AgentStep = {
+  id: number;
+  stepName: string;
+  stepType: string;
+  status: 'STARTED' | 'SUCCEEDED' | 'FAILED' | 'SKIPPED';
+  rationale: string | null;
+  input: Record<string, unknown> | null;
+  output: Record<string, unknown> | null;
 };
 
 const API_BASE = import.meta.env.VITE_API_URL ?? 'http://localhost:3001';
@@ -34,41 +39,57 @@ export function App() {
   const [password, setPassword] = useState('password123');
   const [auth, setAuth] = useState<AuthResponse | null>(null);
   const [error, setError] = useState('');
-  const [approvals, setApprovals] = useState<ApprovalRecord[]>([]);
-  const [workItems, setWorkItems] = useState<WorkItemRecord[]>([]);
+  const [workItems, setWorkItems] = useState<WorkItem[]>([]);
+  const [selectedWorkItemId, setSelectedWorkItemId] = useState<number | null>(null);
+  const [runs, setRuns] = useState<AgentRun[]>([]);
+  const [stepsByRunId, setStepsByRunId] = useState<Record<number, AgentStep[]>>({});
 
   const roleGreeting = useMemo(() => {
-    if (!auth) {
-      return '';
-    }
-    if (auth.user.role === 'Maker') {
-      return 'Welcome Maker! Review and approve the first stage of gated actions.';
-    }
-    if (auth.user.role === 'Checker' || auth.user.role === 'Compliance') {
-      return 'Welcome Checker! You provide final authorization for sensitive actions.';
-    }
-    return 'Welcome AI Agent! Propose actions and wait for approvals.';
+    if (!auth) return '';
+    if (auth.user.role === 'Maker') return 'Welcome Maker! You can prepare Swift queue actions.';
+    if (auth.user.role === 'Compliance') return 'Welcome Compliance! You can review audit actions.';
+    return 'Welcome AI Agent! Autonomous assist mode enabled.';
   }, [auth]);
 
-  async function fetchInbox(session: AuthResponse) {
-    const [approvalRes, workItemsRes] = await Promise.all([
-      fetch(`${API_BASE}/approvals/inbox`, {
-        headers: { Authorization: `Bearer ${session.accessToken}` }
-      }),
-      fetch(`${API_BASE}/work-items`, {
-        headers: { Authorization: `Bearer ${session.accessToken}` }
-      })
-    ]);
-
-    if (approvalRes.ok) {
-      const payload = (await approvalRes.json()) as { data: ApprovalRecord[] };
-      setApprovals(payload.data);
-    }
-    if (workItemsRes.ok) {
-      const payload = (await workItemsRes.json()) as { data: WorkItemRecord[] };
-      setWorkItems(payload.data);
-    }
+  async function apiGet<T>(path: string): Promise<T> {
+    if (!auth) throw new Error('Not authenticated');
+    const response = await fetch(`${API_BASE}${path}`, {
+      headers: { Authorization: `Bearer ${auth.accessToken}` }
+    });
+    if (!response.ok) throw new Error(`Request failed: ${path}`);
+    return response.json() as Promise<T>;
   }
+
+  async function loadRuns(workItemId: number) {
+    const runsResponse = await apiGet<{ data: AgentRun[] }>(`/agent/runs?workItemId=${workItemId}`);
+    setRuns(runsResponse.data);
+
+    const stepsEntries = await Promise.all(
+      runsResponse.data.map(async (run) => {
+        const stepsResponse = await apiGet<{ data: AgentStep[] }>(`/agent/runs/${run.id}/steps`);
+        return [run.id, stepsResponse.data] as const;
+      })
+    );
+
+    setStepsByRunId(Object.fromEntries(stepsEntries));
+  }
+
+  useEffect(() => {
+    if (!auth) return;
+    apiGet<{ data: WorkItem[] }>('/work-items')
+      .then((response) => {
+        setWorkItems(response.data);
+        if (response.data.length > 0) {
+          setSelectedWorkItemId(response.data[0].id);
+        }
+      })
+      .catch(() => setError('Unable to load work items'));
+  }, [auth]);
+
+  useEffect(() => {
+    if (!auth || selectedWorkItemId === null) return;
+    loadRuns(selectedWorkItemId).catch(() => setError('Unable to load agent timeline'));
+  }, [auth, selectedWorkItemId]);
 
   async function onSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -88,50 +109,17 @@ export function App() {
     setAuth(payload);
   }
 
-  async function proposeOutboundSend() {
-    if (!auth) {
-      return;
-    }
-
-    await fetch(`${API_BASE}/work-items/propose`, {
+  async function runAgent() {
+    if (!auth || selectedWorkItemId === null) return;
+    await fetch(`${API_BASE}/agent/run/${selectedWorkItemId}`, {
       method: 'POST',
-      headers: {
-        Authorization: `Bearer ${auth.accessToken}`,
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({
-        actionType: 'OUTBOUND_SWIFT_SEND',
-        payload: {
-          mtType: 'MT700',
-          instruction: 'Draft amendment send'
-        },
-        isHighRisk: true
-      })
+      headers: { Authorization: `Bearer ${auth.accessToken}` }
     });
 
-    await fetchInbox(auth);
+    const items = await apiGet<{ data: WorkItem[] }>('/work-items');
+    setWorkItems(items.data);
+    await loadRuns(selectedWorkItemId);
   }
-
-  async function decide(approvalId: number, decision: 'APPROVED' | 'REJECTED') {
-    if (!auth) {
-      return;
-    }
-    await fetch(`${API_BASE}/approvals/${approvalId}/decision`, {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${auth.accessToken}`,
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({ decision })
-    });
-    await fetchInbox(auth);
-  }
-
-  useEffect(() => {
-    if (auth) {
-      void fetchInbox(auth);
-    }
-  }, [auth]);
 
   if (!auth) {
     return (
@@ -149,42 +137,57 @@ export function App() {
     );
   }
 
+  const selectedWorkItem = workItems.find((item) => item.id === selectedWorkItemId) ?? null;
+
   return (
-    <main style={{ maxWidth: 760, margin: '60px auto', fontFamily: 'sans-serif' }}>
+    <main style={{ maxWidth: 900, margin: '40px auto', fontFamily: 'sans-serif' }}>
       <h1>SwiftCat Dashboard</h1>
       <p>Hi {auth.user.username}.</p>
       <p>{roleGreeting}</p>
       <p>Your role: <strong>{auth.user.role}</strong></p>
-
-      {auth.user.role === 'AI_Agent' && <button onClick={proposeOutboundSend}>Propose outbound SWIFT send</button>}
-
-      <section style={{ marginTop: 24 }}>
-        <h2>Approval Inbox</h2>
-        {approvals.length === 0 ? <p>No pending approvals for your role.</p> : (
-          <ul>
-            {approvals.map((approval) => (
-              <li key={approval.id} style={{ marginBottom: 12 }}>
-                #{approval.id} · {approval.actionType} · work item #{approval.workItem.id}
-                <div>
-                  <button onClick={() => decide(approval.id, 'APPROVED')}>Approve</button>
-                  <button onClick={() => decide(approval.id, 'REJECTED')} style={{ marginLeft: 8 }}>Reject</button>
-                </div>
-              </li>
-            ))}
-          </ul>
-        )}
-      </section>
 
       <section style={{ marginTop: 24 }}>
         <h2>Work Items</h2>
         <ul>
           {workItems.map((item) => (
             <li key={item.id}>
-              #{item.id} · {item.actionType} · state: <strong>{item.state}</strong> · pending approvals: {item.approvals.filter((a) => a.state === 'PENDING').length}
+              <button type="button" onClick={() => setSelectedWorkItemId(item.id)}>
+                {item.reference} — {item.status}
+              </button>
             </li>
           ))}
         </ul>
       </section>
+
+      {selectedWorkItem && (
+        <section style={{ marginTop: 24 }}>
+          <h2>Work Item Detail</h2>
+          <p>Reference: <strong>{selectedWorkItem.reference}</strong></p>
+          <p>Status: <strong>{selectedWorkItem.status}</strong></p>
+          <button type="button" onClick={() => runAgent().catch(() => setError('Agent run failed'))}>Run Agent</button>
+
+          <h3 style={{ marginTop: 20 }}>Agent Timeline</h3>
+          {runs.length === 0 && <p>No runs yet.</p>}
+          {runs.map((run) => (
+            <div key={run.id} style={{ border: '1px solid #ddd', padding: 12, marginBottom: 12 }}>
+              <p>
+                Run #{run.id} — <strong>{run.status}</strong>
+              </p>
+              <p>Started: {new Date(run.startedAt).toLocaleString()}</p>
+              {stepsByRunId[run.id]?.map((step) => (
+                <details key={step.id} style={{ marginBottom: 8 }}>
+                  <summary>{step.stepType} / {step.stepName} — {step.status}</summary>
+                  <p>{step.rationale}</p>
+                  <pre>input: {JSON.stringify(step.input, null, 2)}</pre>
+                  <pre>output: {JSON.stringify(step.output, null, 2)}</pre>
+                </details>
+              ))}
+            </div>
+          ))}
+        </section>
+      )}
+
+      {error && <p style={{ color: 'crimson' }}>{error}</p>}
     </main>
   );
 }
