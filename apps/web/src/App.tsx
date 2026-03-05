@@ -10,15 +10,26 @@ type AuthResponse = {
 
 type WorkItem = {
   id: number;
-  messageType: string;
-  domain: string | null;
-  state: string;
-  priority: number;
+  reference: string;
+  status: 'RECEIVED' | 'CLASSIFIED' | 'ROUTED';
+};
+
+type AgentRun = {
+  id: number;
+  workItemId: number;
+  status: 'RUNNING' | 'SUCCEEDED' | 'FAILED';
+  startedAt: string;
+  finishedAt: string | null;
+};
+
+type AgentStep = {
+  id: number;
+  stepName: string;
+  stepType: string;
+  status: 'STARTED' | 'SUCCEEDED' | 'FAILED' | 'SKIPPED';
   rationale: string | null;
-  queue: { id: number; name: string } | null;
-  screeningResult?: { toolName: string; hit: boolean; score: number; riskFactors: string } | null;
-  policyDecisions?: { id: number; policyName: string; allow: boolean; rationale: string; createdAt: string }[];
-  confidence: number | null;
+  input: Record<string, unknown> | null;
+  output: Record<string, unknown> | null;
 };
 
 const API_BASE = import.meta.env.VITE_API_URL ?? 'http://localhost:3001';
@@ -28,68 +39,57 @@ export function App() {
   const [password, setPassword] = useState('password123');
   const [auth, setAuth] = useState<AuthResponse | null>(null);
   const [error, setError] = useState('');
-  const [items, setItems] = useState<WorkItem[]>([]);
-  const [selected, setSelected] = useState<WorkItem | null>(null);
+  const [workItems, setWorkItems] = useState<WorkItem[]>([]);
+  const [selectedWorkItemId, setSelectedWorkItemId] = useState<number | null>(null);
+  const [runs, setRuns] = useState<AgentRun[]>([]);
+  const [stepsByRunId, setStepsByRunId] = useState<Record<number, AgentStep[]>>({});
 
   const roleGreeting = useMemo(() => {
-    if (!auth) {
-      return '';
-    }
-    if (auth.user.role === 'Maker') {
-      return 'Welcome Maker! You can prepare Swift queue actions.';
-    }
-    if (auth.user.role === 'Compliance') {
-      return 'Welcome Compliance! You can review audit actions.';
-    }
+    if (!auth) return '';
+    if (auth.user.role === 'Maker') return 'Welcome Maker! You can prepare Swift queue actions.';
+    if (auth.user.role === 'Compliance') return 'Welcome Compliance! You can review audit actions.';
     return 'Welcome AI Agent! Autonomous assist mode enabled.';
   }, [auth]);
 
-  useEffect(() => {
-    if (!auth) {
-      return;
-    }
-    void loadWorkItems(auth.accessToken);
-  }, [auth]);
-
-  async function loadWorkItems(token: string) {
-    const response = await fetch(`${API_BASE}/work-items`, {
-      headers: { Authorization: `Bearer ${token}` }
-    });
-    if (!response.ok) {
-      return;
-    }
-    const payload = (await response.json()) as { data: WorkItem[] };
-    setItems(payload.data);
-  }
-
-  async function openDetail(id: number) {
-    if (!auth) {
-      return;
-    }
-    const response = await fetch(`${API_BASE}/work-items/${id}`, {
+  async function apiGet<T>(path: string): Promise<T> {
+    if (!auth) throw new Error('Not authenticated');
+    const response = await fetch(`${API_BASE}${path}`, {
       headers: { Authorization: `Bearer ${auth.accessToken}` }
     });
-    if (!response.ok) {
-      return;
-    }
-    const payload = (await response.json()) as { data: WorkItem };
-    setSelected(payload.data);
+    if (!response.ok) throw new Error(`Request failed: ${path}`);
+    return response.json() as Promise<T>;
   }
 
-  async function ingestExample(messageType: string, rawMessage: string) {
-    if (!auth) {
-      return;
-    }
-    await fetch(`${API_BASE}/work-items/ingest`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${auth.accessToken}`
-      },
-      body: JSON.stringify({ messageType, rawMessage })
-    });
-    await loadWorkItems(auth.accessToken);
+  async function loadRuns(workItemId: number) {
+    const runsResponse = await apiGet<{ data: AgentRun[] }>(`/agent/runs?workItemId=${workItemId}`);
+    setRuns(runsResponse.data);
+
+    const stepsEntries = await Promise.all(
+      runsResponse.data.map(async (run) => {
+        const stepsResponse = await apiGet<{ data: AgentStep[] }>(`/agent/runs/${run.id}/steps`);
+        return [run.id, stepsResponse.data] as const;
+      })
+    );
+
+    setStepsByRunId(Object.fromEntries(stepsEntries));
   }
+
+  useEffect(() => {
+    if (!auth) return;
+    apiGet<{ data: WorkItem[] }>('/work-items')
+      .then((response) => {
+        setWorkItems(response.data);
+        if (response.data.length > 0) {
+          setSelectedWorkItemId(response.data[0].id);
+        }
+      })
+      .catch(() => setError('Unable to load work items'));
+  }, [auth]);
+
+  useEffect(() => {
+    if (!auth || selectedWorkItemId === null) return;
+    loadRuns(selectedWorkItemId).catch(() => setError('Unable to load agent timeline'));
+  }, [auth, selectedWorkItemId]);
 
   async function onSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -109,6 +109,18 @@ export function App() {
     setAuth(payload);
   }
 
+  async function runAgent() {
+    if (!auth || selectedWorkItemId === null) return;
+    await fetch(`${API_BASE}/agent/run/${selectedWorkItemId}`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${auth.accessToken}` }
+    });
+
+    const items = await apiGet<{ data: WorkItem[] }>('/work-items');
+    setWorkItems(items.data);
+    await loadRuns(selectedWorkItemId);
+  }
+
   if (!auth) {
     return (
       <main style={{ maxWidth: 420, margin: '60px auto', fontFamily: 'sans-serif' }}>
@@ -125,54 +137,57 @@ export function App() {
     );
   }
 
+  const selectedWorkItem = workItems.find((item) => item.id === selectedWorkItemId) ?? null;
+
   return (
-    <main style={{ maxWidth: 980, margin: '40px auto', fontFamily: 'sans-serif' }}>
+    <main style={{ maxWidth: 900, margin: '40px auto', fontFamily: 'sans-serif' }}>
       <h1>SwiftCat Dashboard</h1>
       <p>Hi {auth.user.username}.</p>
       <p>{roleGreeting}</p>
       <p>Your role: <strong>{auth.user.role}</strong></p>
-      <div style={{ display: 'flex', gap: 8, marginBottom: 16 }}>
-        <button onClick={() => ingestExample('MT700', 'Trade message with sanction keyword for review')}>Ingest MT700 sanctions example</button>
-        <button onClick={() => ingestExample('pacs.008', 'Standard pacs.008 customer transfer')}>Ingest pacs.008 example</button>
-      </div>
 
-      <h2>Work Items</h2>
-      <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-        <thead>
-          <tr>
-            <th>ID</th><th>Message</th><th>Domain</th><th>State</th><th>Queue</th><th>Priority</th><th>Why</th>
-          </tr>
-        </thead>
-        <tbody>
-          {items.map((item) => (
-            <tr key={item.id} onClick={() => openDetail(item.id)} style={{ cursor: 'pointer', borderTop: '1px solid #ddd' }}>
-              <td>{item.id}</td>
-              <td>{item.messageType}</td>
-              <td>{item.domain ?? '-'}</td>
-              <td>{item.state}</td>
-              <td>{item.queue?.name ?? '-'}</td>
-              <td>{item.priority}</td>
-              <td title={item.rationale ?? 'No rationale'}>{item.rationale ? 'ℹ️' : '-'}</td>
-            </tr>
+      <section style={{ marginTop: 24 }}>
+        <h2>Work Items</h2>
+        <ul>
+          {workItems.map((item) => (
+            <li key={item.id}>
+              <button type="button" onClick={() => setSelectedWorkItemId(item.id)}>
+                {item.reference} — {item.status}
+              </button>
+            </li>
           ))}
-        </tbody>
-      </table>
+        </ul>
+      </section>
 
-      {selected && (
-        <section style={{ marginTop: 20, padding: 12, border: '1px solid #ccc' }}>
-          <h3>Work Item #{selected.id} Detail</h3>
-          <p><strong>Classification:</strong> domain={selected.domain ?? '-'}, confidence={selected.confidence ?? '-'}</p>
-          <p><strong>Screening:</strong> {selected.screeningResult ? `${selected.screeningResult.toolName} hit=${String(selected.screeningResult.hit)} risk=${selected.screeningResult.riskFactors || 'none'}` : 'n/a'}</p>
-          <div>
-            <strong>Policy decisions:</strong>
-            <ul>
-              {selected.policyDecisions?.map((decision) => (
-                <li key={decision.id}>{decision.policyName}: {decision.allow ? 'ALLOW' : 'DENY'} — {decision.rationale}</li>
+      {selectedWorkItem && (
+        <section style={{ marginTop: 24 }}>
+          <h2>Work Item Detail</h2>
+          <p>Reference: <strong>{selectedWorkItem.reference}</strong></p>
+          <p>Status: <strong>{selectedWorkItem.status}</strong></p>
+          <button type="button" onClick={() => runAgent().catch(() => setError('Agent run failed'))}>Run Agent</button>
+
+          <h3 style={{ marginTop: 20 }}>Agent Timeline</h3>
+          {runs.length === 0 && <p>No runs yet.</p>}
+          {runs.map((run) => (
+            <div key={run.id} style={{ border: '1px solid #ddd', padding: 12, marginBottom: 12 }}>
+              <p>
+                Run #{run.id} — <strong>{run.status}</strong>
+              </p>
+              <p>Started: {new Date(run.startedAt).toLocaleString()}</p>
+              {stepsByRunId[run.id]?.map((step) => (
+                <details key={step.id} style={{ marginBottom: 8 }}>
+                  <summary>{step.stepType} / {step.stepName} — {step.status}</summary>
+                  <p>{step.rationale}</p>
+                  <pre>input: {JSON.stringify(step.input, null, 2)}</pre>
+                  <pre>output: {JSON.stringify(step.output, null, 2)}</pre>
+                </details>
               ))}
-            </ul>
-          </div>
+            </div>
+          ))}
         </section>
       )}
+
+      {error && <p style={{ color: 'crimson' }}>{error}</p>}
     </main>
   );
 }

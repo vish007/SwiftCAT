@@ -16,6 +16,7 @@ test.before(() => {
 });
 
 test.beforeEach(async () => {
+  runSql('DELETE FROM canonical_messages;');
   runSql('DELETE FROM swift_messages;');
   server = app.listen(port);
   await new Promise((r) => setTimeout(r, 20));
@@ -42,5 +43,7 @@ test('ingest endpoint is idempotent by external_ref + mt', async () => {
   await fetch(`http://localhost:${port}/ingest/swift`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(payload) });
 
   const count = runSqlJson("SELECT COUNT(*) as count FROM swift_messages WHERE external_ref='IDEMP-1' AND mt_type='MT103';")[0].count;
+  const canonicalCount = runSqlJson("SELECT COUNT(*) as count FROM canonical_messages c JOIN swift_messages s ON s.id = c.swift_message_id WHERE s.external_ref='IDEMP-1' AND s.mt_type='MT103';")[0].count;
   assert.equal(count, 1);
+  assert.equal(canonicalCount, 1);
 });

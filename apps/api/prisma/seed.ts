@@ -72,6 +72,12 @@ async function main() {
     update: {},
     create: { code: 'MT103', description: 'Single customer credit transfer' }
   });
+
+  await prisma.workItem.upsert({
+    where: { reference: 'WI-1001' },
+    update: {},
+    create: { reference: 'WI-1001' }
+  });
 }
 
 main()
