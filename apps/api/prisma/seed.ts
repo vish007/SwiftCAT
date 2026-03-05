@@ -58,11 +58,14 @@ async function main() {
     });
   }
 
-  await prisma.queue.upsert({
-    where: { name: 'incoming-swift' },
-    update: {},
-    create: { name: 'incoming-swift' }
-  });
+  const queues = ['incoming-swift', 'payments-ops', 'trade-ops', 'reconciliation-ops', 'ops-review', 'compliance-review'];
+  for (const queueName of queues) {
+    await prisma.queue.upsert({
+      where: { name: queueName },
+      update: {},
+      create: { name: queueName }
+    });
+  }
 
   await prisma.swiftMtCode.upsert({
     where: { code: 'MT103' },

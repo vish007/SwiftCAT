@@ -7,6 +7,15 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
+enum WorkItemState {
+  INGESTED
+  CLASSIFIED
+  SCREENED
+  ROUTED
+  EXCEPTION
+  READY
+}
+
 model User {
   id             Int             @id @default(autoincrement())
   username       String          @unique
@@ -71,9 +80,10 @@ model Permission {
 }
 
 model Queue {
-  id        Int      @id @default(autoincrement())
-  name      String   @unique
-  createdAt DateTime @default(now()) @map("created_at")
+  id        Int        @id @default(autoincrement())
+  name      String     @unique
+  createdAt DateTime   @default(now()) @map("created_at")
+  workItems WorkItem[]
 
   @@map("queues")
 }
