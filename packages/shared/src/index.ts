@@ -19,3 +19,5 @@ export type AuthResponse = {
     role: Role;
   };
 };
+
+export * from './demo';

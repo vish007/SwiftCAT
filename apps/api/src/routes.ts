@@ -1,4 +1,5 @@
 import bcrypt from 'bcryptjs';
+import { randomUUID } from 'node:crypto';
 import type { FastifyInstance } from 'fastify';
 import { AgentRunStatus, AgentStepStatus, type Prisma } from '@prisma/client';
 import { loginSchema } from '@swiftcat/shared';
@@ -106,9 +107,54 @@ export async function registerRoutes(app: FastifyInstance) {
   app.get('/queues', {
     preHandler: [app.verifyJwt],
     schema: { tags: ['queues'], summary: 'List queues', security: [{ bearerAuth: [] }] }
-  }, async () => {
-    const queues = await prisma.queue.findMany({ orderBy: { id: 'asc' } });
-    return { data: queues };
+  }, async (request) => {
+    const query = request.query as { page?: string; pageSize?: string };
+    const page = Number(query.page ?? '1');
+    const pageSize = Number(query.pageSize ?? '10');
+    const boundedPage = Number.isFinite(page) && page > 0 ? page : 1;
+    const boundedPageSize = Number.isFinite(pageSize) ? Math.min(Math.max(pageSize, 1), 100) : 10;
+    const skip = (boundedPage - 1) * boundedPageSize;
+
+    const [queues, total] = await Promise.all([
+      prisma.queue.findMany({ orderBy: { id: 'asc' }, skip, take: boundedPageSize }),
+      prisma.queue.count()
+    ]);
+
+    return { data: queues, page: boundedPage, pageSize: boundedPageSize, total };
+  });
+
+  app.get('/demo/scenarios', {
+    schema: { tags: ['demo'], summary: 'List banker demo scenarios with timeline' }
+  }, async (request, reply) => {
+    const correlationId = resolveCorrelationId(request.headers);
+    reply.header('x-correlation-id', correlationId);
+
+    const query = request.query as { page?: string; pageSize?: string };
+    const page = Number(query.page ?? '1');
+    const pageSize = Number(query.pageSize ?? '10');
+
+    const paged = paginateScenarios(listScenarios(), page, pageSize);
+
+    return {
+      ...paged,
+      correlationId
+    };
+  });
+
+  app.get('/demo/scenarios/:id', {
+    schema: { tags: ['demo'], summary: 'Get one demo scenario' }
+  }, async (request, reply) => {
+    const correlationId = resolveCorrelationId(request.headers);
+    reply.header('x-correlation-id', correlationId);
+
+    const params = request.params as { id: string };
+    const scenario = getScenarioById(params.id);
+
+    if (!scenario) {
+      return reply.code(404).send({ message: 'Scenario not found', correlationId });
+    }
+
+    return { data: scenario, correlationId };
   });
 
   app.get('/work-items', {

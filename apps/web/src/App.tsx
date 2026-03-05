@@ -34,6 +34,10 @@ type AgentStep = {
 
 const API_BASE = import.meta.env.VITE_API_URL ?? 'http://localhost:3001';
 
+export function buildScenarioDigest(scenario: DemoScenario): string {
+  return `${scenario.name} | ${scenario.workItemId} | ${scenario.status} | ${scenario.timeline.map((step) => step.label).join(' -> ')}`;
+}
+
 export function App() {
   const [username, setUsername] = useState('amira');
   const [password, setPassword] = useState('password123');
