@@ -4,7 +4,7 @@ import { PrismaClient } from '@prisma/client';
 const prisma = new PrismaClient();
 
 async function main() {
-  const roles = ['Maker', 'Compliance', 'AI_Agent'] as const;
+  const roles = ['Maker', 'Checker', 'Compliance', 'AI_Agent'] as const;
 
   for (const roleName of roles) {
     await prisma.role.upsert({
@@ -15,11 +15,13 @@ async function main() {
   }
 
   const maker = await prisma.role.findUniqueOrThrow({ where: { name: 'Maker' } });
+  const checker = await prisma.role.findUniqueOrThrow({ where: { name: 'Checker' } });
   const compliance = await prisma.role.findUniqueOrThrow({ where: { name: 'Compliance' } });
   const aiAgent = await prisma.role.findUniqueOrThrow({ where: { name: 'AI_Agent' } });
 
   const permissionsByRole: Record<string, string[]> = {
-    Maker: ['queue.read', 'queue.write'],
+    Maker: ['queue.read', 'queue.write', 'approval.maker'],
+    Checker: ['queue.read', 'approval.checker'],
     Compliance: ['audit.read', 'queue.read'],
     AI_Agent: ['queue.read', 'action.write']
   };
@@ -41,7 +43,8 @@ async function main() {
 
   const users = [
     { username: 'amira', password: 'password123', roleId: maker.id },
-    { username: 'john', password: 'password123', roleId: compliance.id },
+    { username: 'john', password: 'password123', roleId: checker.id },
+    { username: 'compliance_olivia', password: 'password123', roleId: compliance.id },
     { username: 'swiftcat_ai', password: 'password123', roleId: aiAgent.id }
   ];
 

@@ -8,15 +8,18 @@ datasource db {
 }
 
 model User {
-  id             Int             @id @default(autoincrement())
-  username       String          @unique
-  passwordHash   String          @map("password_hash")
-  refreshToken   String?         @map("refresh_token")
-  createdAt      DateTime        @default(now()) @map("created_at")
-  updatedAt      DateTime        @updatedAt @map("updated_at")
-  roleId         Int             @map("role_id")
-  role           Role            @relation(fields: [roleId], references: [id])
-  messageActions MessageAction[]
+  id               Int             @id @default(autoincrement())
+  username         String          @unique
+  passwordHash     String          @map("password_hash")
+  refreshToken     String?         @map("refresh_token")
+  createdAt        DateTime        @default(now()) @map("created_at")
+  updatedAt        DateTime        @updatedAt @map("updated_at")
+  roleId           Int             @map("role_id")
+  role             Role            @relation(fields: [roleId], references: [id])
+  messageActions   MessageAction[]
+  approvalsAsMaker Approval[]      @relation("ApprovalMaker")
+  approvalsAsChecker Approval[]    @relation("ApprovalChecker")
+  agentSteps       AgentStep[]
 
   @@map("users")
 }
@@ -68,4 +71,74 @@ model SwiftMtCode {
   createdAt   DateTime @default(now()) @map("created_at")
 
   @@map("swift_mt_codes")
+}
+
+model WorkItem {
+  id          Int            @id @default(autoincrement())
+  actionType  ActionType     @map("action_type")
+  payload     Json
+  state       WorkItemState  @default(WAITING_APPROVAL)
+  requestedBy RequestedBy    @map("requested_by")
+  createdById Int            @map("created_by_id")
+  createdAt   DateTime       @default(now()) @map("created_at")
+  updatedAt   DateTime       @updatedAt @map("updated_at")
+  approvals   Approval[]
+  agentSteps  AgentStep[]
+
+  @@map("work_items")
+}
+
+model Approval {
+  id            Int           @id @default(autoincrement())
+  workItemId    Int           @map("work_item_id")
+  requestedBy   RequestedBy   @map("requested_by")
+  actionType    ActionType    @map("action_type")
+  payload       Json
+  state         ApprovalState @default(PENDING)
+  makerUserId   Int?          @map("maker_user_id")
+  checkerUserId Int?          @map("checker_user_id")
+  createdAt     DateTime      @default(now()) @map("created_at")
+  decidedAt     DateTime?     @map("decided_at")
+  workItem      WorkItem      @relation(fields: [workItemId], references: [id])
+  makerUser     User?         @relation("ApprovalMaker", fields: [makerUserId], references: [id])
+  checkerUser   User?         @relation("ApprovalChecker", fields: [checkerUserId], references: [id])
+
+  @@map("approvals")
+}
+
+model AgentStep {
+  id          Int      @id @default(autoincrement())
+  workItemId  Int      @map("work_item_id")
+  stepType    String   @map("step_type")
+  details     String
+  createdAt   DateTime @default(now()) @map("created_at")
+  performedBy Int?     @map("performed_by")
+  workItem    WorkItem @relation(fields: [workItemId], references: [id])
+  user        User?    @relation(fields: [performedBy], references: [id])
+
+  @@map("agent_steps")
+}
+
+enum ApprovalState {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+enum ActionType {
+  OUTBOUND_SWIFT_SEND
+  POST_TO_CBS
+  CLOSE_CASE
+}
+
+enum RequestedBy {
+  ai
+  user
+}
+
+enum WorkItemState {
+  WAITING_APPROVAL
+  APPROVED
+  EXECUTED
+  REJECTED
 }
